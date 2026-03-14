@@ -39,8 +39,12 @@ class DStream(nn.Module):
         super().__init__()
         self.d_model = d_model
         
-        # Predictor: predict next state from current
-        self.predictor = nn.Linear(d_model, d_model)
+        # Predictor: predict next state from current (2-layer for better predictions)
+        self.predictor = nn.Sequential(
+            nn.Linear(d_model, d_model),
+            nn.GELU(),
+            nn.Linear(d_model, d_model),
+        )
         
         # Error projection: transform raw error into useful signal
         self.W_err = nn.Linear(d_model, d_model)

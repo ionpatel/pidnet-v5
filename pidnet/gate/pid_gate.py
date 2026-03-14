@@ -38,10 +38,10 @@ class PIDGate(nn.Module):
         self.W_blend = nn.Linear(gate_input_dim, 3)  # → softmax → [gp, gi, gd]
         
         # Skip gate: should we even apply this rewrite?
-        # Initialize bias very negative so model defaults to "apply" not "skip"
         self.W_skip = nn.Linear(gate_input_dim, 1)
-        # Manually set bias to -3.0 → sigmoid(-3) ≈ 0.05 (rarely skip initially)
-        self.W_skip.bias = mx.array([-3.0])
+        # Freeze skip: always apply rewrites. Skip was causing laziness.
+        # Can re-enable once the model is learning well.
+        self.skip_enabled = False
         
         # Minimum gate values (prevent any stream from dying completely)
         self.min_gate = 0.05
@@ -81,7 +81,10 @@ class PIDGate(nn.Module):
         # Enforce minimum gate values (prevent stream death)
         gate_weights = gate_weights * (1 - 3 * self.min_gate) + self.min_gate
         
-        # Skip gate
-        skip = mx.sigmoid(self.W_skip(gate_input))  # [batch, 1]
+        # Skip gate (disabled by default — was causing laziness)
+        if self.skip_enabled:
+            skip = mx.sigmoid(self.W_skip(gate_input))  # [batch, 1]
+        else:
+            skip = mx.zeros((gate_input.shape[0], 1))  # always apply
         
         return gate_weights, skip

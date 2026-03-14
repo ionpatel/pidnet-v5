@@ -236,8 +236,15 @@ class PIDGraphNet(nn.Module):
         # All nodes active
         mask = mx.ones((batch_size, seq_len), dtype=mx.bool_)
         
-        # Initialize fast weights and prediction
-        fast_weights = mx.zeros((batch_size, self.d_model, self.d_model))
+        # Initialize fast weights — use cached from previous sequence if available
+        # This is segment-level recurrence: fast weights carry memory across windows
+        if hasattr(self, '_cached_fast_weights') and self._cached_fast_weights is not None:
+            # Decay old memory and reuse (cross-window memory!)
+            fast_weights = self._cached_fast_weights * 0.9
+            # Detach from previous graph to avoid backprop through segments
+            fast_weights = mx.stop_gradient(fast_weights)
+        else:
+            fast_weights = mx.zeros((batch_size, self.d_model, self.d_model))
         prediction = mx.zeros_like(nodes)
         
         state = GraphState(
@@ -249,29 +256,33 @@ class PIDGraphNet(nn.Module):
             n_active=mx.full((batch_size,), seq_len, dtype=mx.int32),
         )
         
-        # === ENERGY BEFORE REWRITING ===
-        energy_before = graph_energy(state)
-        
         # === APPLY R ROUNDS OF PID REWRITING (on full graph) ===
+        # Track node norms before rewriting (for energy conservation)
+        node_norm_before = mx.sqrt(mx.sum(state.nodes ** 2, axis=-1, keepdims=True) + 1e-8)
+        
         all_diagnostics = []
         for r in range(self.n_rewrite_steps):
             state, diag = self.rewrite_step(state)
             all_diagnostics.append(diag)
         
-        # === ENERGY CONSERVATION ===
-        energy_after = graph_energy(state)
-        energy_ratio = mx.sqrt(
-            mx.abs(energy_before) / (mx.abs(energy_after) + 1e-8)
-        )
-        energy_ratio = mx.clip(energy_ratio, 0.95, 1.05)
+        # === ENERGY CONSERVATION (per-node norm preservation) ===
+        # Instead of global energy ratio (breaks with large graphs),
+        # preserve each node's L2 norm through rewriting.
+        # This prevents explosion/collapse at the node level.
+        node_norm_after = mx.sqrt(mx.sum(state.nodes ** 2, axis=-1, keepdims=True) + 1e-8)
+        norm_ratio = node_norm_before / node_norm_after
+        norm_ratio = mx.clip(norm_ratio, 0.8, 1.2)  # allow some change, prevent extremes
         state = GraphState(
-            nodes=state.nodes * energy_ratio.reshape(-1, 1, 1),
+            nodes=state.nodes * norm_ratio,
             adjacency=state.adjacency,
             fast_weights=state.fast_weights,
             prediction=state.prediction,
             mask=state.mask,
             n_active=state.n_active,
         )
+        
+        # Cache fast weights for cross-window memory (segment recurrence)
+        self._cached_fast_weights = mx.stop_gradient(state.fast_weights)
         
         # === READOUT ALL AT ONCE (no Python loops!) ===
         logits = self.readout(self.readout_norm(state.nodes))  # [batch, seq_len, vocab]
@@ -283,9 +294,7 @@ class PIDGraphNet(nn.Module):
                 values = [d[key] for d in all_diagnostics]
                 avg_diagnostics[key] = mx.mean(mx.stack(values))
         
-        avg_diagnostics['energy_ratio'] = mx.mean(
-            mx.abs(energy_after) / (mx.abs(energy_before) + 1e-8)
-        )
+        avg_diagnostics['energy_ratio'] = mx.mean(norm_ratio)
         
         return logits, avg_diagnostics
     
