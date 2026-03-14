@@ -179,7 +179,6 @@ class PIDGraphNet(nn.Module):
         
         all_logits = []
         all_diagnostics = []
-        initial_energy = None
         
         for t in range(seq_len):
             # Embed current token
@@ -190,9 +189,8 @@ class PIDGraphNet(nn.Module):
             # Add node to graph
             state = add_node(state, features, connect_k=self.connect_k)
             
-            # Track initial energy (for Hamiltonian conservation)
-            if initial_energy is None:
-                initial_energy = graph_energy(state)
+            # Snapshot energy BEFORE rewriting (for conservation)
+            energy_before = graph_energy(state)
             
             # Apply R rounds of PID rewriting
             step_diagnostics = []
@@ -200,12 +198,13 @@ class PIDGraphNet(nn.Module):
                 state, diag = self.rewrite_step(state)
                 step_diagnostics.append(diag)
             
-            # Energy conservation: project back to energy-preserving manifold
-            current_energy = graph_energy(state)
+            # Energy conservation: compare BEFORE vs AFTER rewriting
+            # (not vs initial empty graph — that ratio explodes as nodes are added)
+            energy_after = graph_energy(state)
             energy_ratio = mx.sqrt(
-                mx.abs(initial_energy) / (mx.abs(current_energy) + 1e-8)
+                mx.abs(energy_before) / (mx.abs(energy_after) + 1e-8)
             )
-            energy_ratio = mx.clip(energy_ratio, 0.9, 1.1)  # gentle correction
+            energy_ratio = mx.clip(energy_ratio, 0.95, 1.05)  # gentle correction
             state = GraphState(
                 nodes=state.nodes * energy_ratio.reshape(-1, 1, 1),
                 adjacency=state.adjacency,
@@ -240,10 +239,9 @@ class PIDGraphNet(nn.Module):
                 values = [d[key] for d in all_diagnostics]
                 avg_diagnostics[key] = mx.mean(mx.stack(values))
         
-        # Add energy conservation diagnostic
-        final_energy = graph_energy(state)
+        # Energy ratio diagnostic (last step's before/after ratio)
         avg_diagnostics['energy_ratio'] = mx.mean(
-            mx.abs(final_energy) / (mx.abs(initial_energy) + 1e-8)
+            mx.abs(energy_after) / (mx.abs(energy_before) + 1e-8)
         )
         
         return logits, avg_diagnostics
