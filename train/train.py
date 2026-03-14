@@ -239,15 +239,77 @@ def train(args):
             
             print(f"{'='*80}\n")
     
+    # Save model weights
+    save_path = args.save or "pidnet_weights.safetensors"
+    print(f"\n💾 Saving weights to {save_path}...")
+    model.save_weights(save_path)
+    print(f"  ✅ Saved!")
+    
     # Final summary
     print("\n" + "=" * 60)
     print("TRAINING COMPLETE")
     print(f"  Best loss: {best_loss:.4f}")
     print(f"  Collapse events: {collapse_count}")
     print(f"  Parameters: {n_params:,}")
+    print(f"  Weights: {save_path}")
     print("=" * 60)
     
     return model
+
+
+def generate_only(args):
+    """Load saved weights and generate samples."""
+    from data import load_shakespeare
+    
+    print("📚 Loading data (for tokenizer)...")
+    train_data, _ = load_shakespeare(seq_len=args.seq_len)
+    
+    print("🧠 Building model...")
+    if args.fractal:
+        model = FractalPIDNet(
+            vocab_size=train_data.vocab_size,
+            d_model=args.d_model,
+            max_nodes=args.seq_len + 16,
+            n_rewrite_steps=args.n_rewrite_steps,
+            connect_k=args.connect_k,
+            chunk_size=args.chunk_size,
+            n_levels=args.n_levels,
+        )
+    else:
+        model = PIDGraphNet(
+            vocab_size=train_data.vocab_size,
+            d_model=args.d_model,
+            max_nodes=args.seq_len + 16,
+            n_rewrite_steps=args.n_rewrite_steps,
+            connect_k=args.connect_k,
+        )
+    
+    load_path = args.load
+    print(f"📂 Loading weights from {load_path}...")
+    model.load_weights(load_path)
+    print(f"  ✅ Loaded! ({count_parameters(model):,} params)")
+    
+    test_prompts = [
+        "To be or not to be",
+        "ROMEO: ",
+        "The king",
+        "What is",
+        "Once upon",
+    ]
+    
+    print(f"\n{'='*40} Generation (temp={args.temperature}) {'='*40}")
+    for prompt_text in test_prompts:
+        prompt_tokens = mx.array([train_data.encode(prompt_text)])
+        generated = model.generate(
+            prompt_tokens,
+            max_new_tokens=args.generate_len,
+            temperature=args.temperature,
+        )
+        full_text = train_data.decode(generated)
+        collapsed = check_collapse(full_text[len(prompt_text):])
+        status = "🔴 COLLAPSE" if collapsed else "🟢 OK"
+        print(f"  [{status}] \"{full_text[:150]}\"")
+    print(f"{'='*80}")
 
 
 if __name__ == "__main__":
@@ -268,5 +330,12 @@ if __name__ == "__main__":
     parser.add_argument("--chunk-size", type=int, default=16, help="Chunk size for fractal pooling")
     parser.add_argument("--n-levels", type=int, default=3, help="Number of fractal levels")
     
+    parser.add_argument("--save", type=str, default=None, help="Save weights path")
+    parser.add_argument("--load", type=str, default=None, help="Load weights and generate (skip training)")
+    
     args = parser.parse_args()
-    train(args)
+    
+    if args.load:
+        generate_only(args)
+    else:
+        train(args)
