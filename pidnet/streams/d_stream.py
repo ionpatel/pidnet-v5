@@ -116,8 +116,7 @@ class DStream(nn.Module):
         stagnation = mx.sigmoid((cos_sim - self.stagnation_threshold) * 500.0)
         stagnation = stagnation * mask_expanded
         
-        # Track for diagnostics
-        self._last_stagnation_rate = mx.mean(stagnation).item()
+        # (prediction stagnation tracked but NOT used for kickout — see below)
         
         # === DIVERSITY COLLAPSE ===
         # Check if consecutive nodes are too similar (token repetition at feature level)
@@ -133,8 +132,13 @@ class DStream(nn.Module):
         neighbor_stagnant = mx.sigmoid((neighbor_cos - self.stagnation_threshold) * 500.0)
         neighbor_stagnant = neighbor_stagnant * mask_expanded
         
-        # Combined stagnation (either prediction is too accurate OR neighbors are too similar)
-        combined_stagnation = mx.maximum(stagnation, neighbor_stagnant)
+        # Only use DIVERSITY collapse for stagnation (not prediction accuracy)
+        # A good predictor is desirable, not a problem.
+        # Stagnation = consecutive nodes being too similar = actual repetition.
+        combined_stagnation = neighbor_stagnant
+        
+        # Track diversity stagnation for diagnostics
+        self._last_stagnation_rate = mx.mean(neighbor_stagnant).item()
         
         # Diversity perturbation: project the difference to create useful signal
         diff = nodes - shifted
