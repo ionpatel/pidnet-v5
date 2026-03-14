@@ -317,6 +317,9 @@ class PIDGraphNet(nn.Module):
         tokens = prompt_tokens.tolist()[0]
         generated = list(tokens)
         
+        # Clear cached fast weights (training batch size != generation batch size)
+        self._cached_fast_weights = None
+        
         for _ in range(max_new_tokens):
             seq_len = len(generated)
             if seq_len >= self.max_nodes:
