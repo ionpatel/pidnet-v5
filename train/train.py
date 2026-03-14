@@ -93,13 +93,18 @@ def train(args):
         
         # Prediction loss: train the D-stream predictor
         # Without this, the predictor never learns → D-gate dies
+        # Weight 0.01 — enough to train predictor without overwhelming CE loss
         pred_loss = diagnostics.get('pred_loss', mx.array(0.0))
         
         # Skip penalty: discourage lazy skipping
         skip_val = diagnostics.get('skip', mx.array(0.0))
-        skip_penalty = skip_val * 0.1  # gentle push toward engaging
+        skip_penalty = skip_val * 0.05  # gentle push toward engaging
         
-        loss = ce_loss + 0.1 * pred_loss + skip_penalty
+        loss = ce_loss + 0.01 * pred_loss + skip_penalty
+        
+        # Track CE loss separately for monitoring
+        diagnostics['ce_loss'] = ce_loss
+        
         return loss, diagnostics
     
     # Compile loss + grad
@@ -153,7 +158,10 @@ def train(args):
             pred_err = diagnostics['pred_error'].item()
             energy = diagnostics['energy_ratio'].item()
             
-            print(f"\nStep {step}/{args.steps} | Loss: {loss_val:.4f} | BPB: {bpb:.3f} | {tokens_per_sec:.0f} tok/s")
+            ce_val = diagnostics.get('ce_loss', loss).item() if 'ce_loss' in diagnostics else loss_val
+            ce_bpb = ce_val / 0.6931
+            
+            print(f"\nStep {step}/{args.steps} | Loss: {loss_val:.4f} | CE: {ce_val:.4f} | BPB: {ce_bpb:.3f} | {tokens_per_sec:.0f} tok/s")
             print(f"  Gates: P={gp:.3f} I={gi:.3f} D={gd:.3f} | Skip={skip:.3f}")
             print(f"  Pred Error: {pred_err:.4f} | Energy Ratio: {energy:.4f}")
             
