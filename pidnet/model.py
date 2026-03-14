@@ -306,56 +306,40 @@ class PIDGraphNet(nn.Module):
         top_k: int = 50,
     ) -> mx.array:
         """
-        Autoregressive generation from a prompt.
+        Autoregressive generation using the SAME parallel infrastructure as training.
         
-        This is the CRITICAL test — v1-v3 collapsed here.
-        The hypergraph structure + Hamiltonian conservation
-        + predictive coding should prevent collapse.
+        Key insight: we must use the same processing mode for generation as training,
+        otherwise we get train-inference mismatch (the v1-v3 killer bug).
+        
+        Approach: re-run the full parallel forward pass with the growing sequence
+        each time we generate a token. O(T²) total but correct.
         """
         tokens = prompt_tokens.tolist()[0]
-        state = create_empty_state(1, self.max_nodes, self.d_model)
-        
-        # Process prompt
-        for t, tok in enumerate(tokens):
-            tok_embed = self.embed(mx.array([[tok]]))[:, 0]
-            pos_embed = self.pos_embed(mx.array(t))
-            features = tok_embed + pos_embed
-            state = add_node(state, features, connect_k=self.connect_k)
-            
-            for _ in range(self.n_rewrite_steps):
-                state, _ = self.rewrite_step(state)
-        
-        # Generate new tokens
         generated = list(tokens)
+        
         for _ in range(max_new_tokens):
-            t = len(generated)
-            if t >= self.max_nodes:
+            seq_len = len(generated)
+            if seq_len >= self.max_nodes:
                 break
             
-            # Get logits from current state
-            current_pos = mx.minimum(state.n_active - 1, self.max_nodes - 1)
-            p = current_pos[0].item()
-            current_node = state.nodes[0:1, p:p+1, :].reshape(1, self.d_model)
-            logits = self.readout(self.readout_norm(current_node))[0]  # [vocab]
+            # Build full sequence tensor
+            input_tokens = mx.array([generated])  # [1, current_len]
+            
+            # Run full parallel forward pass (same as training!)
+            logits, _ = self.__call__(input_tokens)  # [1, current_len, vocab]
+            
+            # Get prediction from LAST position
+            last_logits = logits[0, -1]  # [vocab]
             
             # Temperature + top-k sampling
-            logits = logits / temperature
+            last_logits = last_logits / temperature
             if top_k > 0:
-                top_k_vals = mx.sort(logits)[-top_k]
-                logits = mx.where(logits < top_k_vals, float('-inf'), logits)
-            probs = mx.softmax(logits, axis=-1)
+                top_k_val = mx.sort(last_logits)[-top_k]
+                last_logits = mx.where(last_logits < top_k_val, float('-inf'), last_logits)
+            probs = mx.softmax(last_logits, axis=-1)
             next_token = mx.random.categorical(mx.log(probs + 1e-10)).item()
             
             generated.append(next_token)
-            
-            # Add new token to graph and rewrite
-            tok_embed = self.embed(mx.array([[next_token]]))[:, 0]
-            pos_embed = self.pos_embed(mx.array(t))
-            features = tok_embed + pos_embed
-            state = add_node(state, features, connect_k=self.connect_k)
-            
-            for _ in range(self.n_rewrite_steps):
-                state, _ = self.rewrite_step(state)
         
         return mx.array(generated)
 
