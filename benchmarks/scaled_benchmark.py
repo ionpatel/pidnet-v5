@@ -19,7 +19,7 @@ import mlx.optimizers as optim
 from pidnet.fractal import FractalPIDNet
 from pidnet.model import count_parameters
 from benchmarks.transformer_baseline import TransformerLM, count_params, check_collapse
-from train.data import load_shakespeare
+from train.data import load_shakespeare, load_tinystories
 
 
 def train_model(model, train_data, args, model_name, is_fractal=False):
@@ -138,10 +138,15 @@ def main():
     parser.add_argument("--log-every", type=int, default=100)
     parser.add_argument("--generate-every", type=int, default=1000)
     parser.add_argument("--model", type=str, default="both", choices=["pidnet", "transformer", "both"])
+    parser.add_argument("--dataset", type=str, default="shakespeare", choices=["shakespeare", "tinystories"])
+    parser.add_argument("--max-stories", type=int, default=50000, help="Max TinyStories to use")
     args = parser.parse_args()
     
     # Load data
-    train_data, val_data = load_shakespeare(seq_len=args.seq_len)
+    if args.dataset == "tinystories":
+        train_data, val_data = load_tinystories(seq_len=args.seq_len, max_stories=args.max_stories)
+    else:
+        train_data, val_data = load_shakespeare(seq_len=args.seq_len)
     
     # Scale configs
     if args.scale == "5M":

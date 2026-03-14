@@ -22,7 +22,7 @@ sys.path.insert(0, parent_dir)
 
 from pidnet.model import PIDGraphNet, count_parameters
 from pidnet.fractal import FractalPIDNet
-from data import load_shakespeare
+from data import load_shakespeare, load_tinystories
 
 
 def check_collapse(text: str, threshold: int = 5) -> bool:
@@ -56,7 +56,10 @@ def train(args):
     
     # Load data
     print("\n📚 Loading data...")
-    train_data, val_data = load_shakespeare(seq_len=args.seq_len)
+    if args.dataset == "tinystories":
+        train_data, val_data = load_tinystories(seq_len=args.seq_len, max_stories=args.max_stories)
+    else:
+        train_data, val_data = load_shakespeare(seq_len=args.seq_len)
     
     # Create model
     print("\n🧠 Building model...")
@@ -139,13 +142,22 @@ def train(args):
     collapse_count = 0
     
     # Test prompts for generation
-    test_prompts = [
-        "To be or not to be",
-        "ROMEO: ",
-        "The king",
-        "What is",
-        "Once upon",
-    ]
+    if args.dataset == "tinystories":
+        test_prompts = [
+            "Once upon a time",
+            "The little girl",
+            "One day, a boy",
+            "There was a",
+            "She looked at",
+        ]
+    else:
+        test_prompts = [
+            "To be or not to be",
+            "ROMEO: ",
+            "The king",
+            "What is",
+            "Once upon",
+        ]
     
     for step in range(1, args.steps + 1):
         t0 = time.time()
@@ -259,10 +271,13 @@ def train(args):
 
 def generate_only(args):
     """Load saved weights and generate samples."""
-    from data import load_shakespeare
+    from data import load_shakespeare, load_tinystories
     
     print("📚 Loading data (for tokenizer)...")
-    train_data, _ = load_shakespeare(seq_len=args.seq_len)
+    if args.dataset == "tinystories":
+        train_data, _ = load_tinystories(seq_len=args.seq_len, max_stories=args.max_stories)
+    else:
+        train_data, _ = load_shakespeare(seq_len=args.seq_len)
     
     print("🧠 Building model...")
     if args.fractal:
@@ -330,6 +345,9 @@ if __name__ == "__main__":
     parser.add_argument("--chunk-size", type=int, default=16, help="Chunk size for fractal pooling")
     parser.add_argument("--n-levels", type=int, default=3, help="Number of fractal levels")
     
+    parser.add_argument("--dataset", type=str, default="shakespeare", choices=["shakespeare", "tinystories"],
+                        help="Dataset to train on")
+    parser.add_argument("--max-stories", type=int, default=50000, help="Max TinyStories to load")
     parser.add_argument("--save", type=str, default=None, help="Save weights path")
     parser.add_argument("--load", type=str, default=None, help="Load weights and generate (skip training)")
     
