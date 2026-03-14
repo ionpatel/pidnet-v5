@@ -45,7 +45,7 @@ class DStream(nn.Module):
     - Diversity penalty: detects when neighboring nodes become too similar
     """
     
-    def __init__(self, d_model: int, stagnation_threshold: float = 0.95):
+    def __init__(self, d_model: int, stagnation_threshold: float = 0.99):
         super().__init__()
         self.d_model = d_model
         self.stagnation_threshold = stagnation_threshold
@@ -110,8 +110,10 @@ class DStream(nn.Module):
         cos_sim = mx.sum(nodes * prediction, axis=-1, keepdims=True) / (nodes_norm * pred_norm)
         # cos_sim: [batch, N, 1]
         
-        # Stagnation where cos_sim > threshold
-        stagnation = (cos_sim > self.stagnation_threshold).astype(mx.float32)
+        # Soft stagnation: sigmoid ramp centered at threshold
+        # Instead of hard binary, smoothly ramp up kickout as cos_sim → 1.0
+        # Temperature 50 means: at threshold → 0.5, at threshold+0.005 → 0.62
+        stagnation = mx.sigmoid((cos_sim - self.stagnation_threshold) * 50.0)
         stagnation = stagnation * mask_expanded
         
         # Track for diagnostics
@@ -127,8 +129,8 @@ class DStream(nn.Module):
         shifted_norm = mx.sqrt(mx.sum(shifted ** 2, axis=-1, keepdims=True) + 1e-8)
         neighbor_cos = mx.sum(nodes * shifted, axis=-1, keepdims=True) / (nodes_norm * shifted_norm)
         
-        # High similarity between consecutive nodes → diversity collapsed
-        neighbor_stagnant = (neighbor_cos > self.stagnation_threshold).astype(mx.float32)
+        # Soft diversity collapse detection (same sigmoid ramp)
+        neighbor_stagnant = mx.sigmoid((neighbor_cos - self.stagnation_threshold) * 50.0)
         neighbor_stagnant = neighbor_stagnant * mask_expanded
         
         # Combined stagnation (either prediction is too accurate OR neighbors are too similar)
