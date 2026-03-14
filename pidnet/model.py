@@ -142,6 +142,7 @@ class PIDRewriteStep(nn.Module):
                 (nodes - state.prediction) ** 2 * mx.expand_dims(mask, -1),
                 axis=-1
             ) + 1e-8)),
+            'stagnation': mx.array(self.d_stream.stagnation_rate),
             'edge_density': edge_density,
         }
         

@@ -184,14 +184,19 @@ def train(args):
             
             edge_dens = diagnostics.get('edge_density', mx.array(0.0)).item()
             
+            stag = diagnostics.get('stagnation', mx.array(0.0)).item()
+            
             print(f"\nStep {step}/{args.steps} | Loss: {loss_val:.4f} | CE: {ce_val:.4f} | BPB: {ce_bpb:.3f} | {tokens_per_sec:.0f} tok/s")
             print(f"  Gates: P={gp:.3f} I={gi:.3f} D={gd:.3f} | Skip={skip:.3f}")
-            print(f"  Pred Error: {pred_err:.4f} | Energy: {energy:.4f} | Edges: {edge_dens:.4f}")
+            print(f"  Pred Error: {pred_err:.4f} | Energy: {energy:.4f} | Edges: {edge_dens:.4f} | Stag: {stag:.3f}")
             
             # Warn if any gate is dying
             for name, val in [('P', gp), ('I', gi), ('D', gd)]:
                 if val < 0.08:
                     print(f"  ⚠️  {name}-gate is low ({val:.3f}) — may be dying!")
+            
+            if stag > 0.5:
+                print(f"  ⚠️  High stagnation ({stag:.3f}) — kickout active!")
             
             if loss_val < best_loss:
                 best_loss = loss_val
