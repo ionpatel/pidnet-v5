@@ -321,7 +321,7 @@ class PIDGraphNet(nn.Module):
         max_new_tokens: int = 100,
         temperature: float = 0.8,
         top_k: int = 50,
-        repetition_penalty: float = 1.3,
+        repetition_penalty: float = 1.5,
     ) -> mx.array:
         """
         Autoregressive generation with repetition penalty.
@@ -344,16 +344,24 @@ class PIDGraphNet(nn.Module):
             logits, _ = self.__call__(input_tokens)
             last_logits = logits[0, -1]
             
-            # Repetition penalty: reduce logits for recently generated tokens
+            # Frequency-based repetition penalty:
+            # More occurrences in recent window → harder penalty
+            # Single occurrence: penalty^1 = 1.5x
+            # 5 occurrences: penalty^5 = 7.6x  
+            # 10 occurrences: penalty^10 = 57.7x (practically killed)
             if repetition_penalty > 1.0:
-                recent = set(generated[-32:])
-                for token_id in recent:
+                window = generated[-32:]
+                from collections import Counter
+                freq = Counter(window)
+                for token_id, count in freq.items():
                     if token_id < last_logits.shape[0]:
+                        # Scale penalty by frequency: penalty^count
+                        scaled_penalty = repetition_penalty ** count
                         val = last_logits[token_id].item()
                         if val > 0:
-                            last_logits = last_logits.at[token_id].add(val * (1.0 / repetition_penalty - 1.0))
+                            last_logits = last_logits.at[token_id].add(val * (1.0 / scaled_penalty - 1.0))
                         else:
-                            last_logits = last_logits.at[token_id].add(val * (repetition_penalty - 1.0))
+                            last_logits = last_logits.at[token_id].add(val * (scaled_penalty - 1.0))
             
             last_logits = last_logits / temperature
             if top_k > 0:
