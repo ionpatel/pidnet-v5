@@ -312,4 +312,18 @@ class PIDGraphNet(nn.Module):
 
 def count_parameters(model: nn.Module) -> int:
     """Count total trainable parameters."""
-    return sum(p.size for p in model.parameters().values() if isinstance(p, mx.array))
+    total = 0
+    
+    def _count(params):
+        nonlocal total
+        if isinstance(params, mx.array):
+            total += params.size
+        elif isinstance(params, dict):
+            for v in params.values():
+                _count(v)
+        elif isinstance(params, (list, tuple)):
+            for v in params:
+                _count(v)
+    
+    _count(model.parameters())
+    return total
