@@ -38,8 +38,10 @@ class PIDGate(nn.Module):
         self.W_blend = nn.Linear(gate_input_dim, 3)  # → softmax → [gp, gi, gd]
         
         # Skip gate: should we even apply this rewrite?
-        # Initialize bias negative so model defaults to "apply" not "skip"
+        # Initialize bias very negative so model defaults to "apply" not "skip"
         self.W_skip = nn.Linear(gate_input_dim, 1)
+        # Manually set bias to -3.0 → sigmoid(-3) ≈ 0.05 (rarely skip initially)
+        self.W_skip.bias = mx.array([-3.0])
         
         # Minimum gate values (prevent any stream from dying completely)
         self.min_gate = 0.05

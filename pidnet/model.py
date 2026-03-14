@@ -103,12 +103,20 @@ class PIDRewriteStep(nn.Module):
             n_active=state.n_active,
         )
         
+        # Prediction loss (train the predictor directly!)
+        pred_loss = self.d_stream.prediction_loss(
+            actual=nodes,
+            predicted=state.prediction,
+            mask=mask,
+        )
+        
         # Diagnostics for monitoring
         diagnostics = {
             'gate_p': mx.mean(gate_weights[:, 0]),
             'gate_i': mx.mean(gate_weights[:, 1]),
             'gate_d': mx.mean(gate_weights[:, 2]),
             'skip': mx.mean(skip),
+            'pred_loss': pred_loss,
             'pred_error': mx.mean(mx.sqrt(mx.sum(
                 (nodes - state.prediction) ** 2 * mx.expand_dims(mask, -1),
                 axis=-1

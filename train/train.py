@@ -85,11 +85,21 @@ def train(args):
         # Cross-entropy loss
         # logits: [batch, seq_len, vocab]
         # targets: [batch, seq_len]
-        loss = nn.losses.cross_entropy(
+        ce_loss = nn.losses.cross_entropy(
             logits.reshape(-1, logits.shape[-1]),
             targets.reshape(-1),
         )
-        loss = mx.mean(loss)
+        ce_loss = mx.mean(ce_loss)
+        
+        # Prediction loss: train the D-stream predictor
+        # Without this, the predictor never learns → D-gate dies
+        pred_loss = diagnostics.get('pred_loss', mx.array(0.0))
+        
+        # Skip penalty: discourage lazy skipping
+        skip_val = diagnostics.get('skip', mx.array(0.0))
+        skip_penalty = skip_val * 0.1  # gentle push toward engaging
+        
+        loss = ce_loss + 0.1 * pred_loss + skip_penalty
         return loss, diagnostics
     
     # Compile loss + grad
