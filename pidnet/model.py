@@ -189,13 +189,25 @@ class PIDGraphNet(nn.Module):
         self._causal_adj = self._build_causal_adjacency(max_nodes, connect_k)
     
     def _build_causal_adjacency(self, size: int, k: int) -> mx.array:
-        """Build causal adjacency matrix: node i connects to previous k nodes."""
-        adj = mx.zeros((size, size))
-        for i in range(size):
-            for j in range(max(0, i - k), i):
-                strength = 1.0 / (i - j)
-                adj = adj.at[i, j].add(strength)
-                adj = adj.at[j, i].add(strength * 0.5)
+        """Build causal adjacency matrix: node i connects to previous k nodes.
+        
+        VECTORIZED — no Python loops. O(size) instead of O(size²).
+        """
+        # Build distance matrix: dist[i,j] = i - j
+        indices = mx.arange(size)
+        dist = indices[:, None] - indices[None, :]  # [size, size]
+        
+        # Forward connections: j→i where 0 < dist <= k
+        valid = (dist > 0) & (dist <= k)
+        strength = mx.where(valid, 1.0 / dist, 0.0)
+        
+        # Backward connections (half strength): i→j  
+        valid_back = (dist < 0) & (-dist <= k)
+        strength_back = mx.where(valid_back, 0.5 / (-dist), 0.0)
+        
+        adj = strength + strength_back
+        
+        # Apply causal mask
         causal = mx.tril(mx.ones((size, size)))
         return adj * causal
     

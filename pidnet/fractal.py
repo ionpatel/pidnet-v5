@@ -163,15 +163,16 @@ class FractalPIDNet(nn.Module):
         self._adj_cache = {}
     
     def _get_causal_adjacency(self, size: int) -> mx.array:
-        """Get or build causal adjacency for given size."""
+        """Get or build causal adjacency for given size. VECTORIZED."""
         if size not in self._adj_cache:
-            adj = mx.zeros((size, size))
             k = min(self.connect_k, size)
-            for i in range(size):
-                for j in range(max(0, i - k), i):
-                    strength = 1.0 / (i - j)
-                    adj = adj.at[i, j].add(strength)
-                    adj = adj.at[j, i].add(strength * 0.5)
+            indices = mx.arange(size)
+            dist = indices[:, None] - indices[None, :]
+            valid = (dist > 0) & (dist <= k)
+            strength = mx.where(valid, 1.0 / dist, 0.0)
+            valid_back = (dist < 0) & (-dist <= k)
+            strength_back = mx.where(valid_back, 0.5 / (-dist), 0.0)
+            adj = strength + strength_back
             causal = mx.tril(mx.ones((size, size)))
             self._adj_cache[size] = adj * causal
         return self._adj_cache[size]
