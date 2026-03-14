@@ -288,8 +288,14 @@ class FractalPIDNet(nn.Module):
         max_new_tokens: int = 100,
         temperature: float = 0.8,
         top_k: int = 50,
+        repetition_penalty: float = 1.3,
     ) -> mx.array:
-        """Autoregressive generation using full parallel forward."""
+        """Autoregressive generation with repetition penalty.
+        
+        Repetition penalty: tokens that appeared recently get their logits
+        divided by the penalty factor, making them less likely to repeat.
+        This is critical for PID architectures where repetition = equilibrium.
+        """
         tokens = prompt_tokens.tolist()[0]
         generated = list(tokens)
         
@@ -301,7 +307,21 @@ class FractalPIDNet(nn.Module):
             input_tokens = mx.array([generated])
             logits, _ = self.__call__(input_tokens)
             
-            last_logits = logits[0, -1] / temperature
+            last_logits = logits[0, -1]
+            
+            # Repetition penalty: reduce logits for recently generated tokens
+            if repetition_penalty > 1.0:
+                # Look at last 32 tokens for repetition
+                recent = set(generated[-32:])
+                for token_id in recent:
+                    if token_id < last_logits.shape[0]:
+                        val = last_logits[token_id].item()
+                        if val > 0:
+                            last_logits = last_logits.at[token_id].add(val * (1.0 / repetition_penalty - 1.0))
+                        else:
+                            last_logits = last_logits.at[token_id].add(val * (repetition_penalty - 1.0))
+            
+            last_logits = last_logits / temperature
             if top_k > 0:
                 top_k_val = mx.sort(last_logits)[-top_k]
                 last_logits = mx.where(last_logits < top_k_val, float('-inf'), last_logits)

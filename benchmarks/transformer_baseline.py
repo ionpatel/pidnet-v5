@@ -91,7 +91,7 @@ class TransformerLM(nn.Module):
         
         return logits
     
-    def generate(self, prompt_tokens, max_new_tokens=100, temperature=0.8, top_k=50):
+    def generate(self, prompt_tokens, max_new_tokens=100, temperature=0.8, top_k=50, repetition_penalty=1.3):
         tokens = prompt_tokens.tolist()[0]
         generated = list(tokens)
         
@@ -99,7 +99,20 @@ class TransformerLM(nn.Module):
             input_tokens = mx.array([generated])
             logits = self.__call__(input_tokens)
             
-            last_logits = logits[0, -1] / temperature
+            last_logits = logits[0, -1]
+            
+            # Repetition penalty
+            if repetition_penalty > 1.0:
+                recent = set(generated[-32:])
+                for token_id in recent:
+                    if token_id < last_logits.shape[0]:
+                        val = last_logits[token_id].item()
+                        if val > 0:
+                            last_logits = last_logits.at[token_id].add(val * (1.0 / repetition_penalty - 1.0))
+                        else:
+                            last_logits = last_logits.at[token_id].add(val * (repetition_penalty - 1.0))
+            
+            last_logits = last_logits / temperature
             if top_k > 0:
                 top_k_val = mx.sort(last_logits)[-top_k]
                 last_logits = mx.where(last_logits < top_k_val, float('-inf'), last_logits)

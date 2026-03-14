@@ -320,15 +320,13 @@ class PIDGraphNet(nn.Module):
         max_new_tokens: int = 100,
         temperature: float = 0.8,
         top_k: int = 50,
+        repetition_penalty: float = 1.3,
     ) -> mx.array:
         """
-        Autoregressive generation using the SAME parallel infrastructure as training.
+        Autoregressive generation with repetition penalty.
         
-        Key insight: we must use the same processing mode for generation as training,
-        otherwise we get train-inference mismatch (the v1-v3 killer bug).
-        
-        Approach: re-run the full parallel forward pass with the growing sequence
-        each time we generate a token. O(T²) total but correct.
+        Uses the SAME parallel forward pass as training (no train-inference mismatch).
+        Repetition penalty critical for PID: repetition = equilibrium = D→0.
         """
         tokens = prompt_tokens.tolist()[0]
         generated = list(tokens)
@@ -341,16 +339,21 @@ class PIDGraphNet(nn.Module):
             if seq_len >= self.max_nodes:
                 break
             
-            # Build full sequence tensor
-            input_tokens = mx.array([generated])  # [1, current_len]
+            input_tokens = mx.array([generated])
+            logits, _ = self.__call__(input_tokens)
+            last_logits = logits[0, -1]
             
-            # Run full parallel forward pass (same as training!)
-            logits, _ = self.__call__(input_tokens)  # [1, current_len, vocab]
+            # Repetition penalty: reduce logits for recently generated tokens
+            if repetition_penalty > 1.0:
+                recent = set(generated[-32:])
+                for token_id in recent:
+                    if token_id < last_logits.shape[0]:
+                        val = last_logits[token_id].item()
+                        if val > 0:
+                            last_logits = last_logits.at[token_id].add(val * (1.0 / repetition_penalty - 1.0))
+                        else:
+                            last_logits = last_logits.at[token_id].add(val * (repetition_penalty - 1.0))
             
-            # Get prediction from LAST position
-            last_logits = logits[0, -1]  # [vocab]
-            
-            # Temperature + top-k sampling
             last_logits = last_logits / temperature
             if top_k > 0:
                 top_k_val = mx.sort(last_logits)[-top_k]
