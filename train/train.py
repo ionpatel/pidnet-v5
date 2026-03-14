@@ -17,10 +17,11 @@ import os
 import sys
 
 # Add parent dir to path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, parent_dir)
 
 from pidnet.model import PIDGraphNet, count_parameters
-from train.data import load_shakespeare
+from data import load_shakespeare
 
 
 def check_collapse(text: str, threshold: int = 5) -> bool:
