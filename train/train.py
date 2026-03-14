@@ -114,7 +114,14 @@ def train(args):
         skip_val = diagnostics.get('skip', mx.array(0.0))
         skip_penalty = skip_val * 0.05  # gentle push toward engaging
         
-        loss = ce_loss + 0.01 * pred_loss + skip_penalty
+        # Gate entropy regularization: penalize low entropy (collapsed gates)
+        # Max entropy for 3-way = ln(3) ≈ 1.099 (uniform distribution)
+        # We want entropy to stay high so all streams contribute
+        gate_entropy = diagnostics.get('gate_entropy', mx.array(1.0))
+        entropy_target = 1.0  # ~91% of max entropy
+        entropy_loss = mx.maximum(0.0, entropy_target - gate_entropy) * 0.1
+        
+        loss = ce_loss + 0.01 * pred_loss + skip_penalty + entropy_loss
         
         # Track CE loss separately for monitoring
         diagnostics['ce_loss'] = ce_loss

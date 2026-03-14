@@ -127,6 +127,9 @@ class PIDRewriteStep(nn.Module):
         # Edge diagnostics
         edge_density = mx.sum(new_adjacency * mx.expand_dims(mask, -1) * mx.expand_dims(mask, -2)) / (mx.sum(mask) ** 2 + 1e-8)
         
+        # Gate entropy (higher = healthier, more uniform distribution)
+        gate_entropy = -mx.sum(gate_weights * mx.log(gate_weights + 1e-8), axis=-1)
+        
         # Diagnostics for monitoring
         diagnostics = {
             'gate_p': mx.mean(gate_weights[:, 0]),
@@ -134,6 +137,7 @@ class PIDRewriteStep(nn.Module):
             'gate_d': mx.mean(gate_weights[:, 2]),
             'skip': mx.mean(skip),
             'pred_loss': pred_loss,
+            'gate_entropy': mx.mean(gate_entropy),  # max for uniform = ln(3) ≈ 1.10
             'pred_error': mx.mean(mx.sqrt(mx.sum(
                 (nodes - state.prediction) ** 2 * mx.expand_dims(mask, -1),
                 axis=-1

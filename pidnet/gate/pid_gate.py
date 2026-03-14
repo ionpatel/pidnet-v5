@@ -44,7 +44,10 @@ class PIDGate(nn.Module):
         self.skip_enabled = False
         
         # Minimum gate values (prevent any stream from dying completely)
-        self.min_gate = 0.05
+        self.min_gate = 0.10  # raised from 0.05 — each stream gets at least 10%
+        
+        # Gate temperature: higher = more uniform distribution (prevents collapse)
+        self.gate_temperature = 2.0
     
     def __call__(
         self,
@@ -74,12 +77,17 @@ class PIDGate(nn.Module):
         gate_input = mx.concatenate([p_mean, i_mean, d_mean, x_mean], axis=-1)
         # [batch, 4*d]
         
-        # Stream blend
-        blend_logits = self.W_blend(gate_input)  # [batch, 3]
+        # Stream blend with temperature (prevents winner-take-all collapse)
+        blend_logits = self.W_blend(gate_input) / self.gate_temperature  # [batch, 3]
         gate_weights = mx.softmax(blend_logits, axis=-1)  # [batch, 3]
         
         # Enforce minimum gate values (prevent stream death)
+        # With min_gate=0.10: each stream gets at least 10%, max is 70%
         gate_weights = gate_weights * (1 - 3 * self.min_gate) + self.min_gate
+        
+        # Compute gate entropy for regularization (returned via diagnostics)
+        # Higher entropy = more uniform = healthier gates
+        self._gate_entropy = -mx.sum(gate_weights * mx.log(gate_weights + 1e-8), axis=-1)
         
         # Skip gate (disabled by default — was causing laziness)
         if self.skip_enabled:

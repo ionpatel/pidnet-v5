@@ -43,7 +43,10 @@ def train_model(model, train_data, args, model_name, is_fractal=False):
             )
             ce_mean = mx.mean(ce)
             pred_loss = diag.get('pred_loss', mx.array(0.0))
-            return ce_mean + 0.01 * pred_loss, (ce_mean, diag)
+            # Gate entropy regularization (prevent gate collapse at scale)
+            gate_entropy = diag.get('gate_entropy', mx.array(1.0))
+            entropy_loss = mx.maximum(0.0, 1.0 - gate_entropy) * 0.1
+            return ce_mean + 0.01 * pred_loss + entropy_loss, (ce_mean, diag)
     else:
         def loss_fn(model, inputs, targets):
             logits = model(inputs)
