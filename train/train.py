@@ -21,6 +21,7 @@ parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, parent_dir)
 
 from pidnet.model import PIDGraphNet, count_parameters
+from pidnet.fractal import FractalPIDNet
 from data import load_shakespeare
 
 
@@ -59,13 +60,26 @@ def train(args):
     
     # Create model
     print("\n🧠 Building model...")
-    model = PIDGraphNet(
-        vocab_size=train_data.vocab_size,
-        d_model=args.d_model,
-        max_nodes=args.seq_len + 16,  # buffer for graph
-        n_rewrite_steps=args.n_rewrite_steps,
-        connect_k=args.connect_k,
-    )
+    if args.fractal:
+        model = FractalPIDNet(
+            vocab_size=train_data.vocab_size,
+            d_model=args.d_model,
+            max_nodes=args.seq_len + 16,
+            n_rewrite_steps=args.n_rewrite_steps,
+            connect_k=args.connect_k,
+            chunk_size=args.chunk_size,
+            n_levels=args.n_levels,
+        )
+        print(f"Mode: FRACTAL ({args.n_levels} levels, chunk_size={args.chunk_size})")
+    else:
+        model = PIDGraphNet(
+            vocab_size=train_data.vocab_size,
+            d_model=args.d_model,
+            max_nodes=args.seq_len + 16,
+            n_rewrite_steps=args.n_rewrite_steps,
+            connect_k=args.connect_k,
+        )
+        print("Mode: Standard (single-scale)")
     
     # Count parameters
     n_params = count_parameters(model)
@@ -238,6 +252,9 @@ if __name__ == "__main__":
     parser.add_argument("--generate-len", type=int, default=100, help="Generation length")
     parser.add_argument("--log-every", type=int, default=10, help="Log every N steps")
     parser.add_argument("--generate-every", type=int, default=50, help="Generate every N steps")
+    parser.add_argument("--fractal", action="store_true", help="Use FractalPIDNet (multi-scale)")
+    parser.add_argument("--chunk-size", type=int, default=16, help="Chunk size for fractal pooling")
+    parser.add_argument("--n-levels", type=int, default=3, help="Number of fractal levels")
     
     args = parser.parse_args()
     train(args)

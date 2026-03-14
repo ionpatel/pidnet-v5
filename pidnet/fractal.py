@@ -1,0 +1,312 @@
+"""
+Fractal Multi-Scale PID — The Sierpiński Property
+
+The SAME PID rewriting rule operates at multiple scales simultaneously:
+  Level 0 (Token):  individual characters/tokens as nodes
+  Level 1 (Chunk):  groups of k tokens pooled into super-nodes
+  Level 2 (Block):  groups of chunks pooled into block-nodes
+
+Cross-scale communication:
+  Bottom-up: pool token features → chunk features → block features
+  Top-down:  broadcast block context → chunk context → token context
+
+The shared rewriting rule is the fractal property — same weights at every
+scale, different behavior emerges from different graph structures.
+
+Complexity: O(k_levels × d²) per token — linear cost, exponential reach.
+With chunk_size=16 and 3 levels: reach = 16³ = 4096 tokens per block.
+"""
+
+import mlx.core as mx
+import mlx.nn as nn
+
+from .core.state import GraphState
+from .model import PIDRewriteStep
+
+from typing import Tuple, Dict, Optional
+
+
+class FractalPool(nn.Module):
+    """Pool token-level features into chunk-level super-nodes.
+    
+    Takes [batch, N, d] → [batch, N//chunk_size, d]
+    Uses learned weighted pooling (not just mean).
+    """
+    
+    def __init__(self, d_model: int):
+        super().__init__()
+        self.pool_proj = nn.Linear(d_model, d_model)
+        self.norm = nn.LayerNorm(d_model)
+    
+    def __call__(
+        self,
+        nodes: mx.array,        # [batch, N, d]
+        chunk_size: int,
+    ) -> mx.array:
+        """Pool N nodes into N//chunk_size super-nodes."""
+        batch, N, d = nodes.shape
+        n_chunks = N // chunk_size
+        
+        # Truncate to exact multiple of chunk_size
+        truncated = nodes[:, :n_chunks * chunk_size, :]
+        
+        # Reshape into chunks: [batch, n_chunks, chunk_size, d]
+        chunked = truncated.reshape(batch, n_chunks, chunk_size, d)
+        
+        # Mean pool within each chunk
+        pooled = mx.mean(chunked, axis=2)  # [batch, n_chunks, d]
+        
+        # Project and normalize
+        pooled = self.norm(self.pool_proj(pooled))
+        
+        return pooled
+
+
+class FractalBroadcast(nn.Module):
+    """Broadcast chunk-level context back to token level.
+    
+    Each token receives its chunk's summary as additional context.
+    """
+    
+    def __init__(self, d_model: int):
+        super().__init__()
+        self.broadcast_proj = nn.Linear(d_model, d_model)
+        self.gate = nn.Linear(d_model * 2, 1)  # gate how much chunk info to use
+    
+    def __call__(
+        self,
+        token_nodes: mx.array,    # [batch, N, d]
+        chunk_nodes: mx.array,    # [batch, n_chunks, d]
+        chunk_size: int,
+    ) -> mx.array:
+        """Add chunk-level context to each token."""
+        batch, N, d = token_nodes.shape
+        n_chunks = chunk_nodes.shape[1]
+        
+        # Project chunk features
+        chunk_context = self.broadcast_proj(chunk_nodes)  # [batch, n_chunks, d]
+        
+        # Repeat each chunk's context for all tokens in that chunk
+        # [batch, n_chunks, d] → [batch, n_chunks, chunk_size, d] → [batch, N_trunc, d]
+        expanded = mx.repeat(chunk_context[:, :, None, :], chunk_size, axis=2)
+        expanded = expanded.reshape(batch, n_chunks * chunk_size, d)
+        
+        # Pad if needed (when N > n_chunks * chunk_size)
+        if expanded.shape[1] < N:
+            pad_size = N - expanded.shape[1]
+            padding = mx.zeros((batch, pad_size, d))
+            expanded = mx.concatenate([expanded, padding], axis=1)
+        else:
+            expanded = expanded[:, :N, :]
+        
+        # Gated addition: let the model decide how much chunk context to use
+        gate_input = mx.concatenate([token_nodes, expanded], axis=-1)  # [batch, N, 2d]
+        gate_val = mx.sigmoid(self.gate(gate_input))  # [batch, N, 1]
+        
+        # Add gated chunk context
+        output = token_nodes + gate_val * expanded
+        
+        return output
+
+
+class FractalPIDNet(nn.Module):
+    """Multi-scale PID-Net with fractal shared rewriting rule.
+    
+    The SAME PIDRewriteStep operates at every scale.
+    This is the Sierpiński property: self-similar processing.
+    
+    Architecture:
+      Embed → [Token PID Rewrite × R] 
+           → Pool → [Chunk PID Rewrite × R]
+           → Pool → [Block PID Rewrite × R]  
+           → Broadcast Block → Chunk
+           → Broadcast Chunk → Token
+           → Readout
+    """
+    
+    def __init__(
+        self,
+        vocab_size: int,
+        d_model: int = 256,
+        max_nodes: int = 256,
+        n_rewrite_steps: int = 3,
+        connect_k: int = 8,
+        chunk_size: int = 16,
+        n_levels: int = 3,
+    ):
+        super().__init__()
+        self.vocab_size = vocab_size
+        self.d_model = d_model
+        self.max_nodes = max_nodes
+        self.n_rewrite_steps = n_rewrite_steps
+        self.connect_k = connect_k
+        self.chunk_size = chunk_size
+        self.n_levels = n_levels
+        
+        # Token embedding
+        self.embed = nn.Embedding(vocab_size, d_model)
+        self.pos_embed = nn.Embedding(max_nodes, d_model)
+        
+        # SHARED PID rewriting step — used at ALL scales (fractal!)
+        self.rewrite_step = PIDRewriteStep(d_model, evolve_edges=True)
+        
+        # Multi-scale pooling and broadcasting
+        # (one per transition between levels)
+        self.pools = [FractalPool(d_model) for _ in range(n_levels - 1)]
+        self.broadcasts = [FractalBroadcast(d_model) for _ in range(n_levels - 1)]
+        
+        # Readout
+        self.readout_norm = nn.LayerNorm(d_model)
+        self.readout = nn.Linear(d_model, vocab_size)
+        
+        # Pre-compute causal adjacency templates for each level
+        self._adj_cache = {}
+    
+    def _get_causal_adjacency(self, size: int) -> mx.array:
+        """Get or build causal adjacency for given size."""
+        if size not in self._adj_cache:
+            adj = mx.zeros((size, size))
+            k = min(self.connect_k, size)
+            for i in range(size):
+                for j in range(max(0, i - k), i):
+                    strength = 1.0 / (i - j)
+                    adj = adj.at[i, j].add(strength)
+                    adj = adj.at[j, i].add(strength * 0.5)
+            causal = mx.tril(mx.ones((size, size)))
+            self._adj_cache[size] = adj * causal
+        return self._adj_cache[size]
+    
+    def _build_state(self, nodes: mx.array) -> GraphState:
+        """Build a GraphState from node features."""
+        batch, N, d = nodes.shape
+        adj = self._get_causal_adjacency(N)
+        adj = mx.broadcast_to(adj, (batch, N, N))
+        
+        return GraphState(
+            nodes=nodes,
+            adjacency=adj,
+            fast_weights=mx.zeros((batch, d, d)),
+            prediction=mx.zeros_like(nodes),
+            mask=mx.ones((batch, N), dtype=mx.bool_),
+            n_active=mx.full((batch,), N, dtype=mx.int32),
+        )
+    
+    def __call__(
+        self,
+        tokens: mx.array,  # [batch, seq_len]
+    ) -> Tuple[mx.array, Dict]:
+        """
+        Multi-scale fractal forward pass.
+        
+        Processing flow:
+          1. Embed tokens → Level 0 nodes
+          2. For each level (bottom-up):
+             - Run R PID rewriting steps (SHARED rule)
+             - Pool to next level
+          3. For each level (top-down):
+             - Broadcast higher-level context to lower level
+          4. Readout from Level 0
+        """
+        batch_size, seq_len = tokens.shape
+        
+        # === EMBED ===
+        positions = mx.arange(seq_len)
+        nodes_l0 = self.embed(tokens) + self.pos_embed(positions)
+        
+        # === BOTTOM-UP: Rewrite at each scale, then pool ===
+        level_nodes = [nodes_l0]  # store each level's nodes
+        level_diagnostics = []
+        
+        current_nodes = nodes_l0
+        for level in range(self.n_levels):
+            # Build graph state for this level
+            state = self._build_state(current_nodes)
+            
+            # Preserve node norms
+            norm_before = mx.sqrt(mx.sum(state.nodes ** 2, axis=-1, keepdims=True) + 1e-8)
+            
+            # Apply R rounds of PID rewriting (SAME shared rule!)
+            for r in range(self.n_rewrite_steps):
+                state, diag = self.rewrite_step(state)
+            
+            # Norm preservation
+            norm_after = mx.sqrt(mx.sum(state.nodes ** 2, axis=-1, keepdims=True) + 1e-8)
+            ratio = mx.clip(norm_before / norm_after, 0.8, 1.2)
+            state = GraphState(
+                nodes=state.nodes * ratio,
+                adjacency=state.adjacency,
+                fast_weights=state.fast_weights,
+                prediction=state.prediction,
+                mask=state.mask,
+                n_active=state.n_active,
+            )
+            
+            level_nodes[level] = state.nodes  # update with rewritten nodes
+            level_diagnostics.append(diag)
+            
+            # Pool to next level (if not last)
+            if level < self.n_levels - 1:
+                n_nodes = current_nodes.shape[1]
+                if n_nodes >= self.chunk_size * 2:  # need at least 2 chunks
+                    current_nodes = self.pools[level](state.nodes, self.chunk_size)
+                    level_nodes.append(current_nodes)
+                else:
+                    # Too few nodes to pool further — stop going up
+                    break
+        
+        # === TOP-DOWN: Broadcast higher-level context ===
+        for level in range(len(level_nodes) - 1, 0, -1):
+            higher = level_nodes[level]
+            lower = level_nodes[level - 1]
+            
+            # Broadcast: add higher-level context to lower level
+            level_nodes[level - 1] = self.broadcasts[level - 1](
+                lower, higher, self.chunk_size
+            )
+        
+        # === READOUT from Level 0 (token level) ===
+        final_nodes = level_nodes[0]
+        logits = self.readout(self.readout_norm(final_nodes))
+        
+        # Aggregate diagnostics
+        avg_diagnostics = {}
+        if level_diagnostics:
+            for key in level_diagnostics[0]:
+                values = [d[key] for d in level_diagnostics if key in d]
+                if values:
+                    avg_diagnostics[key] = mx.mean(mx.stack(values))
+        
+        avg_diagnostics['n_levels_active'] = mx.array(float(len(level_nodes)))
+        avg_diagnostics['energy_ratio'] = mx.mean(ratio)
+        
+        return logits, avg_diagnostics
+    
+    def generate(
+        self,
+        prompt_tokens: mx.array,
+        max_new_tokens: int = 100,
+        temperature: float = 0.8,
+        top_k: int = 50,
+    ) -> mx.array:
+        """Autoregressive generation using full parallel forward."""
+        tokens = prompt_tokens.tolist()[0]
+        generated = list(tokens)
+        
+        for _ in range(max_new_tokens):
+            seq_len = len(generated)
+            if seq_len >= self.max_nodes:
+                break
+            
+            input_tokens = mx.array([generated])
+            logits, _ = self.__call__(input_tokens)
+            
+            last_logits = logits[0, -1] / temperature
+            if top_k > 0:
+                top_k_val = mx.sort(last_logits)[-top_k]
+                last_logits = mx.where(last_logits < top_k_val, float('-inf'), last_logits)
+            probs = mx.softmax(last_logits, axis=-1)
+            next_token = mx.random.categorical(mx.log(probs + 1e-10)).item()
+            
+            generated.append(next_token)
+        
+        return mx.array(generated)
