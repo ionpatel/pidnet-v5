@@ -302,8 +302,17 @@ def evaluate(args):
             print(f"  Window {i+1}/{n_windows}: CE {avg:.4f} | PPL {math.exp(avg):.1f}")
     
     avg_ce = total_loss / total_tokens
-    bpb = avg_ce / math.log(2)
+    bpt = avg_ce / math.log(2)  # bits per token
     ppl = math.exp(avg_ce)
+    
+    # True bits-per-byte (tokenizer-independent, publishable)
+    with open(test_txt, 'rb') as f:
+        total_bytes = len(f.read())
+    total_bits = total_loss * math.log2(math.e)  # convert nats to bits
+    true_bpb = (total_loss / math.log(2)) * total_tokens / total_bytes
+    
+    # Compression ratio (vs 8 bits/byte raw)
+    compression = 8.0 / true_bpb
     
     print(f"\n{'='*50}")
     print(f"WikiText-103 Test Results")
@@ -312,10 +321,16 @@ def evaluate(args):
     print(f"  Parameters: {n_params:,}")
     print(f"  Vocab:      {vocab_size}")
     print(f"  Seq length: {seq_len}")
-    print(f"  Test CE:    {avg_ce:.4f}")
-    print(f"  Test BPB:   {bpb:.3f}")
-    print(f"  Test PPL:   {ppl:.1f}")
+    print(f"  Test CE:    {avg_ce:.4f} nats/token")
+    print(f"  Test BPT:   {bpt:.3f} bits/token")
+    print(f"  Test PPL:   {ppl:.1f} (per-token)")
+    print(f"  True BPB:   {true_bpb:.3f} bits/byte (tokenizer-independent)")
+    print(f"  Compression: {compression:.1f}x vs raw")
+    print(f"  Test bytes: {total_bytes:,}")
+    print(f"  Test tokens: {total_tokens:,}")
     print(f"{'='*50}")
+    print(f"\n  Note: Compare BPB to GPT-2 Small (117M): ~1.16 BPB")
+    print(f"  Note: Compare BPB to random baseline: {math.log2(vocab_size):.2f} bits/token")
 
 
 if __name__ == '__main__':
