@@ -295,13 +295,15 @@ class FractalPIDNet(nn.Module):
         max_new_tokens: int = 100,
         temperature: float = 0.8,
         top_k: int = 50,
-        repetition_penalty: float = 1.3,
+        repetition_penalty: float = 1.5,
+        penalty_window: int = 32,
     ) -> mx.array:
-        """Autoregressive generation with repetition penalty.
+        """Autoregressive generation with FREQUENCY-BASED repetition penalty.
         
-        Repetition penalty: tokens that appeared recently get their logits
-        divided by the penalty factor, making them less likely to repeat.
-        This is critical for PID architectures where repetition = equilibrium.
+        Penalty scales exponentially with token frequency in the window:
+        penalty^count. A token appearing once gets 1.5x, twice gets 2.25x,
+        10 times gets 57.7x penalty. This breaks the PID equilibrium trap
+        where repetition = stable fixed point (D→0).
         """
         tokens = prompt_tokens.tolist()[0]
         generated = list(tokens)
@@ -316,17 +318,20 @@ class FractalPIDNet(nn.Module):
             
             last_logits = logits[0, -1]
             
-            # Repetition penalty: reduce logits for recently generated tokens
+            # Frequency-based repetition penalty: penalty^count
             if repetition_penalty > 1.0:
-                # Look at last 32 tokens for repetition
-                recent = set(generated[-32:])
-                for token_id in recent:
+                recent = generated[-penalty_window:]
+                from collections import Counter
+                freq = Counter(recent)
+                for token_id, count in freq.items():
                     if token_id < last_logits.shape[0]:
                         val = last_logits[token_id].item()
+                        # penalty^count: exponential with frequency
+                        pen = repetition_penalty ** count
                         if val > 0:
-                            last_logits = last_logits.at[token_id].add(val * (1.0 / repetition_penalty - 1.0))
+                            last_logits = last_logits.at[token_id].add(val * (1.0 / pen - 1.0))
                         else:
-                            last_logits = last_logits.at[token_id].add(val * (repetition_penalty - 1.0))
+                            last_logits = last_logits.at[token_id].add(val * (pen - 1.0))
             
             last_logits = last_logits / temperature
             if top_k > 0:
