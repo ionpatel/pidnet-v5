@@ -155,9 +155,11 @@ class FractalPIDNet(nn.Module):
         self.pools = [FractalPool(d_model) for _ in range(n_levels - 1)]
         self.broadcasts = [FractalBroadcast(d_model) for _ in range(n_levels - 1)]
         
-        # Readout
+        # Readout (weight-tied with embedding for large vocabs)
         self.readout_norm = nn.LayerNorm(d_model)
-        self.readout = nn.Linear(d_model, vocab_size)
+        self._tie_weights = (vocab_size > 1000)  # tie for BPE, not char-level
+        if not self._tie_weights:
+            self.readout = nn.Linear(d_model, vocab_size)
         
         # Pre-compute causal adjacency templates for each level
         self._adj_cache = {}
@@ -267,7 +269,12 @@ class FractalPIDNet(nn.Module):
         
         # === READOUT from Level 0 (token level) ===
         final_nodes = level_nodes[0]
-        logits = self.readout(self.readout_norm(final_nodes))
+        normed = self.readout_norm(final_nodes)
+        if self._tie_weights:
+            # Weight tying: reuse embedding weights for readout (saves ~50% params for large vocab)
+            logits = normed @ self.embed.weight.T
+        else:
+            logits = self.readout(normed)
         
         # Aggregate diagnostics
         avg_diagnostics = {}
