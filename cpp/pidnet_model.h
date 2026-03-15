@@ -79,7 +79,7 @@ public:
     /**
      * Forward pass: apply PID rewriting to graph state.
      */
-    std::pair<GraphState, PIDDiagnostics> forward(const GraphState& state) {
+    GraphState forward(const GraphState& state) {
         auto nodes = state.nodes;
         int batch = nodes.shape(0);
         int N = nodes.shape(1);
@@ -150,8 +150,7 @@ public:
         new_state.fast_weights = state.fast_weights;
         new_state.prediction = new_pred;
         
-        PIDDiagnostics diag;
-        return {new_state, diag};
+        return new_state;
     }
 };
 
@@ -251,8 +250,7 @@ public:
             
             // R rounds of PID rewriting
             for (int r = 0; r < n_rewrite_steps; r++) {
-                auto result = rewrite_step.forward(state);
-                state = result.first;
+                state = rewrite_step.forward(state);
             }
             
             nodes = state.nodes;
