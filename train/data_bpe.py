@@ -133,6 +133,79 @@ def load_tinystories_bpe(seq_len: int = 256, max_stories: int = 50000, val_split
     return load_text_file(path, seq_len, val_split)
 
 
+class SPDataset:
+    """SentencePiece-tokenized dataset for language modeling.
+    
+    Uses a custom-trained small BPE tokenizer (1K-4K vocab).
+    """
+    
+    def __init__(self, token_ids: list, vocab_size: int, sp_model_path: str,
+                 seq_len: int = 256, name: str = "train"):
+        self.token_ids = token_ids
+        self.vocab_size = vocab_size
+        self.seq_len = seq_len
+        self.name = name
+        self._sp_path = sp_model_path
+        self._sp = None  # lazy load
+        
+        print(f"[{name}] Tokens: {len(self.token_ids):,} | Sequences: ~{len(self.token_ids) // seq_len:,} | Vocab: {vocab_size}")
+    
+    def _get_sp(self):
+        if self._sp is None:
+            import sentencepiece as spm
+            self._sp = spm.SentencePieceProcessor()
+            self._sp.load(self._sp_path)
+        return self._sp
+    
+    def get_batch(self, batch_size: int) -> Tuple[mx.array, mx.array]:
+        max_start = len(self.token_ids) - self.seq_len - 1
+        starts = [int(mx.random.randint(0, max_start).item()) for _ in range(batch_size)]
+        
+        inputs = []
+        targets = []
+        for s in starts:
+            inputs.append(self.token_ids[s : s + self.seq_len])
+            targets.append(self.token_ids[s + 1 : s + self.seq_len + 1])
+        
+        return mx.array(inputs), mx.array(targets)
+    
+    def encode(self, text: str) -> list:
+        return self._get_sp().encode(text)
+    
+    def decode(self, indices) -> str:
+        sp = self._get_sp()
+        if hasattr(indices, 'tolist'):
+            indices = indices.tolist()
+        return sp.decode(indices)
+
+
+def load_with_sp_tokenizer(text_path: str, tokenizer_path: str, seq_len: int = 256, 
+                            val_split: float = 0.05) -> Tuple[SPDataset, SPDataset]:
+    """Load text file with a custom SentencePiece tokenizer."""
+    import sentencepiece as spm
+    
+    sp = spm.SentencePieceProcessor()
+    sp.load(tokenizer_path)
+    vocab_size = sp.get_piece_size()
+    
+    print(f"Loading {text_path} with {tokenizer_path} (vocab={vocab_size})...")
+    with open(text_path, 'r', encoding='utf-8', errors='replace') as f:
+        text = f.read()
+    
+    print(f"Text: {len(text):,} chars")
+    tokens = sp.encode(text)
+    print(f"Tokens: {len(tokens):,} (compression: {len(text)/len(tokens):.1f}x)")
+    
+    split_idx = int(len(tokens) * (1 - val_split))
+    train_tokens = tokens[:split_idx]
+    val_tokens = tokens[split_idx:]
+    
+    return (
+        SPDataset(train_tokens, vocab_size, tokenizer_path, seq_len, "train"),
+        SPDataset(val_tokens, vocab_size, tokenizer_path, seq_len, "val"),
+    )
+
+
 # Tokenized binary cache for faster loading
 def save_tokens(tokens: list, path: str):
     """Save tokenized data as numpy binary for fast loading."""

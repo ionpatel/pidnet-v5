@@ -24,8 +24,19 @@ from pidnet.model import PIDGraphNet, count_parameters
 from pidnet.fractal import FractalPIDNet
 from data import load_shakespeare, load_tinystories
 
-def load_dataset_by_name(name, seq_len, max_stories=50000, max_mb=100):
+def load_dataset_by_name(name, seq_len, max_stories=50000, max_mb=100, tokenizer=None):
     """Load dataset by name, supporting char-level and BPE."""
+    if tokenizer:
+        # Custom SentencePiece tokenizer
+        from data_bpe import load_with_sp_tokenizer, download_openwebtext_sample
+        if name == "openwebtext":
+            text_path = download_openwebtext_sample(max_mb=max_mb)
+        elif name.endswith(".txt"):
+            text_path = name
+        else:
+            raise ValueError(f"Custom tokenizer requires openwebtext or .txt, got: {name}")
+        return load_with_sp_tokenizer(text_path, tokenizer, seq_len=seq_len)
+    
     if name == "shakespeare":
         return load_shakespeare(seq_len=seq_len)
     elif name == "tinystories":
@@ -37,7 +48,6 @@ def load_dataset_by_name(name, seq_len, max_stories=50000, max_mb=100):
         from data_bpe import load_openwebtext
         return load_openwebtext(seq_len=seq_len, max_mb=max_mb)
     elif name.endswith(".txt"):
-        # Direct text file
         from data_bpe import load_text_file
         return load_text_file(name, seq_len=seq_len)
     else:
@@ -77,7 +87,8 @@ def train(args):
     print("\n📚 Loading data...")
     train_data, val_data = load_dataset_by_name(
         args.dataset, args.seq_len, 
-        max_stories=args.max_stories, max_mb=args.max_mb
+        max_stories=args.max_stories, max_mb=args.max_mb,
+        tokenizer=args.tokenizer,
     )
     
     # Create model
@@ -301,7 +312,8 @@ def generate_only(args):
     print("📚 Loading data (for tokenizer)...")
     train_data, _ = load_dataset_by_name(
         args.dataset, args.seq_len,
-        max_stories=args.max_stories, max_mb=args.max_mb
+        max_stories=args.max_stories, max_mb=args.max_mb,
+        tokenizer=args.tokenizer,
     )
     
     print("🧠 Building model...")
@@ -374,6 +386,7 @@ if __name__ == "__main__":
                         help="Dataset: shakespeare, tinystories, tinystories-bpe, openwebtext, or path.txt")
     parser.add_argument("--max-stories", type=int, default=50000, help="Max TinyStories to load")
     parser.add_argument("--max-mb", type=int, default=100, help="Max MB for OpenWebText download")
+    parser.add_argument("--tokenizer", type=str, default=None, help="Path to SentencePiece .model file")
     parser.add_argument("--save", type=str, default=None, help="Save weights path")
     parser.add_argument("--load", type=str, default=None, help="Load weights and generate (skip training)")
     
