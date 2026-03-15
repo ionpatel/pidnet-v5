@@ -76,10 +76,8 @@ std::vector<int> generate(
         // Build input tensor
         auto input = mx::array(generated.data(), {1, seq_len}, mx::int32);
         
-        // Forward pass — compiled or raw
-        mx::array logits = use_compile 
-            ? compiled_fwd({input})[0]
-            : model.forward(input);
+        // Forward pass (compile disabled — shape changes every step)
+        auto logits = model.forward(input);
         
         // Get last token logits: logits is [1, seq_len, vocab]
         auto last_logits = mx::reshape(
