@@ -215,6 +215,49 @@ public:
     }
     
     /**
+     * Edge Evolution: dynamic topology based on I and D signals.
+     * The graph BREATHES — edges born, strengthened, weakened based on PID signals.
+     */
+    mx::array evolve_edges(
+        const mx::array& adjacency, const mx::array& nodes,
+        const mx::array& i_signal, const mx::array& d_signal
+    ) {
+        std::string pre = "rewrite_step.edge_evolver.";
+        int batch = nodes.shape(0);
+        int N = nodes.shape(1);
+        int d = nodes.shape(2);
+        
+        // Modulate features with I and D signals
+        auto i_feat = linear_nb(w, pre + "W_i_edge", i_signal);
+        auto d_feat = linear_nb(w, pre + "W_d_edge", d_signal);
+        auto combined = nodes + i_feat * 0.5f + d_feat * 0.5f;
+        
+        // Pairwise dot-product scores / sqrt(d)
+        auto scores = mx::matmul(combined, mx::transpose(combined, {0, 2, 1}));
+        scores = scores / std::sqrt(static_cast<float>(d));
+        
+        // Causal mask + no self-loops
+        auto causal = mx::tril(mx::ones({N, N}));
+        auto eye = mx::eye(N);
+        scores = scores * causal * (mx::array(1.0f) - eye) + eye * (-1e9f);
+        
+        // Sigmoid → edge probabilities
+        auto new_adj = mx::sigmoid(scores);
+        new_adj = new_adj * causal;
+        
+        // Top-k sparsification (keep strongest 16 incoming edges per node)
+        int top_k = std::min(16, N);
+        if (top_k < N) {
+            auto rank = mx::argsort(mx::argsort(mx::array(0.0f) - new_adj, -1), -1);
+            auto topk_mask = mx::astype(rank < mx::array(top_k), mx::float32);
+            new_adj = new_adj * topk_mask;
+        }
+        
+        // Blend: 70% old + 30% new (don't change too fast)
+        return adjacency * 0.7f + new_adj * 0.3f;
+    }
+    
+    /**
      * PID Gate: blend P/I/D with temperature + min floor.
      */
     mx::array gate_blend(
@@ -255,6 +298,7 @@ public:
      */
     struct RewriteState {
         mx::array nodes = mx::array(0.0f);
+        mx::array adjacency = mx::array(0.0f);
         mx::array fast_weights = mx::array(0.0f);
         mx::array prediction = mx::array(0.0f);
     };
@@ -273,11 +317,105 @@ public:
         
         auto new_nodes = gate_blend(p_out, i_out, d_out, nodes);
         
+        // Edge evolution — the graph topology changes
+        auto new_adj = evolve_edges(adj, new_nodes, i_out, d_out);
+        
         RewriteState result;
         result.nodes = new_nodes;
+        result.adjacency = new_adj;
         result.fast_weights = new_fw;
         result.prediction = new_pred;
         return result;
+    }
+    
+    // === KV CACHE: Incremental inference ===
+    // Cache the rewritten nodes from previous steps so we don't
+    // recompute the entire sequence for each new token.
+    struct InferenceCache {
+        mx::array nodes = mx::array(0.0f);       // [1, cached_len, d]
+        mx::array fast_weights = mx::array(0.0f); // [1, d, d]
+        mx::array prediction = mx::array(0.0f);   // [1, cached_len, d]
+        int cached_len = 0;
+        bool valid = false;
+    };
+    InferenceCache cache;
+    
+    void clear_cache() { cache.valid = false; cache.cached_len = 0; }
+    
+    /**
+     * Incremental forward: only compute new token, reuse cached state.
+     * Falls back to full forward when cache is invalid or seq changes.
+     */
+    mx::array forward_incremental(const mx::array& tokens) {
+        int seq_len = tokens.shape(1);
+        
+        // If cache valid and we're just adding one token, use incremental
+        if (cache.valid && seq_len == cache.cached_len + 1) {
+            return forward_one_token(tokens);
+        }
+        
+        // Otherwise do full forward and populate cache
+        auto logits = forward(tokens);
+        return logits;
+    }
+    
+    /**
+     * Process only the new (last) token using cached state.
+     */
+    mx::array forward_one_token(const mx::array& tokens) {
+        int batch = tokens.shape(0);
+        int seq_len = tokens.shape(1);
+        
+        // Embed only the new token
+        auto new_pos = mx::array(seq_len - 1);
+        auto new_tok = mx::slice(tokens, {0, seq_len - 1}, {1, seq_len});
+        auto new_embed = mx::take(W(w, "embed.weight"), mx::reshape(new_tok, {-1}), 0);
+        new_embed = mx::reshape(new_embed, {1, 1, d_model});
+        auto new_pos_embed = mx::take(W(w, "pos_embed.weight"), 
+                                       mx::reshape(new_pos, {1}), 0);
+        auto new_node = new_embed + new_pos_embed;
+        
+        // Concatenate with cached nodes
+        auto all_nodes = mx::concatenate({cache.nodes, new_node}, 1);
+        auto all_pred = mx::concatenate({cache.prediction, mx::zeros({1, 1, d_model})}, 1);
+        
+        // Run rewrite on full sequence (but adjacency only needs one new row/col)
+        auto adj = build_adjacency(seq_len, batch);
+        auto fast_weights = cache.fast_weights;
+        auto prediction = all_pred;
+        auto current = all_nodes;
+        
+        auto norm_before = mx::sqrt(mx::sum(mx::square(current), std::vector<int>{-1}, true) + 1e-8f);
+        
+        for (int r = 0; r < n_rewrite_steps; r++) {
+            auto state = pid_rewrite(current, adj, fast_weights, prediction);
+            current = state.nodes;
+            adj = state.adjacency;
+            fast_weights = state.fast_weights;
+            prediction = state.prediction;
+        }
+        
+        auto norm_after = mx::sqrt(mx::sum(mx::square(current), std::vector<int>{-1}, true) + 1e-8f);
+        auto ratio = mx::clip(norm_before / norm_after, mx::array(0.8f), mx::array(1.2f));
+        current = current * ratio;
+        
+        // Update cache
+        cache.nodes = current;
+        cache.fast_weights = fast_weights;
+        cache.prediction = prediction;
+        cache.cached_len = seq_len;
+        cache.valid = true;
+        
+        // Readout
+        auto normed = (w.find("readout_norm.weight") != w.end())
+            ? ln(w, "readout_norm", current)
+            : current;
+        
+        auto logits = tie_weights
+            ? mx::matmul(normed, mx::transpose(W(w, "embed.weight")))
+            : linear(w, "readout", normed);
+        
+        return logits;
     }
     
     /**
@@ -308,10 +446,11 @@ public:
             // Norm before rewriting
             auto norm_before = mx::sqrt(mx::sum(mx::square(current), std::vector<int>{-1}, true) + 1e-8f);
             
-            // R rewrite steps (SHARED weights)
+            // R rewrite steps (SHARED weights, evolving edges)
             for (int r = 0; r < n_rewrite_steps; r++) {
                 auto state = pid_rewrite(current, adj, fast_weights, prediction);
                 current = state.nodes;
+                adj = state.adjacency;  // edges evolve!
                 fast_weights = state.fast_weights;
                 prediction = state.prediction;
             }
@@ -367,6 +506,12 @@ public:
             auto gate_val = mx::sigmoid(linear(w, bp + "gate", gate_in)); // [batch, N, 1]
             level_nodes[level - 1] = lower + gate_val * expanded;
         }
+        
+        // Populate cache from level 0 (for incremental inference)
+        cache.nodes = current;  // current is level 0 after all rewrites
+        // fast_weights and prediction from last rewrite are already in scope
+        cache.cached_len = seq_len;
+        cache.valid = true;
         
         // === READOUT ===
         auto final_nodes = level_nodes[0];

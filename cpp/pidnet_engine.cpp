@@ -63,6 +63,7 @@ std::vector<int> generate(
     bool use_compile = true
 ) {
     std::vector<int> generated = prompt_tokens;
+    model.clear_cache();
     
     // Compile forward pass — traces graph once, reuses Metal kernels
     auto compiled_fwd = mx::compile([&model](const std::vector<mx::array>& inputs) {
@@ -76,8 +77,8 @@ std::vector<int> generate(
         // Build input tensor
         auto input = mx::array(generated.data(), {1, seq_len}, mx::int32);
         
-        // Forward pass (compile disabled — shape changes every step)
-        auto logits = model.forward(input);
+        // Forward pass — uses cache when available
+        auto logits = model.forward_incremental(input);
         
         // Get last token logits: logits is [1, seq_len, vocab]
         auto last_logits = mx::reshape(
