@@ -239,15 +239,24 @@ public:
         const mx::array& nodes, const mx::array& adj,
         const mx::array& fast_weights, const mx::array& prediction
     ) {
+        std::cerr << "  [rw] P..." << std::flush;
         auto p_out = p_stream(nodes, adj);
+        mx::eval(p_out);
+        std::cerr << "OK D..." << std::flush;
         
         mx::array d_out = mx::array(0.0f), new_pred = mx::array(0.0f);
         d_stream(nodes, prediction, d_out, new_pred);
+        mx::eval(d_out);
+        std::cerr << "OK I..." << std::flush;
         
         mx::array i_out = mx::array(0.0f), new_fw = mx::array(0.0f);
         i_stream(nodes, fast_weights, d_out, i_out, new_fw);
+        mx::eval(i_out);
+        std::cerr << "OK G..." << std::flush;
         
         auto new_nodes = gate_blend(p_out, i_out, d_out, nodes);
+        mx::eval(new_nodes);
+        std::cerr << "OK" << std::endl;
         
         RewriteState result;
         result.nodes = new_nodes;
@@ -263,12 +272,16 @@ public:
         int batch = tokens.shape(0);
         int seq_len = tokens.shape(1);
         
+        std::cerr << "[fwd] start seq=" << seq_len << std::endl;
+        
         // Embed
         auto positions = mx::arange(seq_len);
         auto tok_embed = mx::take(W(w, "embed.weight"), mx::reshape(tokens, {-1}), 0);
         tok_embed = mx::reshape(tok_embed, {batch, seq_len, d_model});
         auto pos_embed = mx::take(W(w, "pos_embed.weight"), positions, 0);
         auto nodes = tok_embed + pos_embed;
+        mx::eval(nodes);
+        std::cerr << "[fwd] embed OK" << std::endl;
         
         // === BOTTOM-UP: Rewrite at each level, then pool ===
         std::vector<mx::array> level_nodes;
@@ -286,10 +299,13 @@ public:
             
             // R rewrite steps (SHARED weights)
             for (int r = 0; r < n_rewrite_steps; r++) {
+                std::cerr << "[fwd] L" << level << " R" << r << " start" << std::endl;
                 auto state = pid_rewrite(current, adj, fast_weights, prediction);
                 current = state.nodes;
                 fast_weights = state.fast_weights;
                 prediction = state.prediction;
+                mx::eval(current);
+                std::cerr << "[fwd] L" << level << " R" << r << " OK" << std::endl;
             }
             
             // Norm preservation
