@@ -147,7 +147,7 @@ def train(args):
     train_tokens = mx.array(train_ids)
     val_tokens = mx.array(val_ids)
     n_steps = args.steps
-    batch_size = 1
+    batch_size = args.batch_size
     
     def get_batch(tokens, seq_len, batch_size=1):
         """Random batch from token array."""
@@ -324,7 +324,8 @@ if __name__ == '__main__':
     parser.add_argument('--d-model', type=int, default=384)
     parser.add_argument('--seq-len', type=int, default=256)
     parser.add_argument('--steps', type=int, default=50000)
-    parser.add_argument('--lr', type=float, default=3e-4)
+    parser.add_argument('--lr', type=float, default=1e-3)
+    parser.add_argument('--batch-size', type=int, default=8)
     parser.add_argument('--model-path', type=str, default=None)
     args = parser.parse_args()
     
