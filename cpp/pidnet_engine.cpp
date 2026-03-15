@@ -10,6 +10,31 @@
 #include <algorithm>
 #include <unordered_map>
 
+// Shakespeare char-level vocab (65 chars)
+const std::string SHAKESPEARE_CHARS = 
+    "\n !$&',-.3:;?ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+
+std::string decode_tokens(const std::vector<int>& tokens, int vocab_size) {
+    std::string result;
+    if (vocab_size <= 128) {
+        // Char-level — use Shakespeare mapping
+        for (int t : tokens) {
+            if (t >= 0 && t < (int)SHAKESPEARE_CHARS.size()) {
+                result += SHAKESPEARE_CHARS[t];
+            } else {
+                result += '?';
+            }
+        }
+    } else {
+        // BPE — just show IDs
+        for (size_t i = 0; i < tokens.size(); i++) {
+            result += std::to_string(tokens[i]);
+            if (i < tokens.size() - 1) result += " ";
+        }
+    }
+    return result;
+}
+
 namespace mx = mlx::core;
 using namespace std::chrono;
 
@@ -206,11 +231,10 @@ int main(int argc, char* argv[]) {
         std::cout << "Generated " << output.size() << " tokens in " 
                   << ms << "ms (" << tps << " tok/s)\n";
         
-        std::cout << "Token IDs: ";
-        for (size_t i = prompt.size(); i < output.size(); i++) {
-            std::cout << output[i] << " ";
-        }
-        std::cout << std::endl;
+        // Decode and print
+        std::vector<int> generated_only(output.begin() + prompt.size(), output.end());
+        std::string text = decode_tokens(generated_only, model.vocab_size);
+        std::cout << "\n--- Generated Text ---\n" << text << "\n---\n" << std::endl;
         
     } else if (command == "benchmark") {
         std::cout << "\n=== PID-Net C++ Inference Benchmark ===" << std::endl;
