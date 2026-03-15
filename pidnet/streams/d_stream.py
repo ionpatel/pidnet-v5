@@ -138,7 +138,8 @@ class DStream(nn.Module):
         combined_stagnation = neighbor_stagnant
         
         # Track diversity stagnation for diagnostics
-        self._last_stagnation_rate = mx.mean(neighbor_stagnant).item()
+        # Store as array (not .item()) to be compatible with mx.compile
+        self._last_stagnation_rate = mx.mean(neighbor_stagnant)
         
         # Diversity perturbation: project the difference to create useful signal
         diff = nodes - shifted

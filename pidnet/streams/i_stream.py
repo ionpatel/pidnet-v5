@@ -112,7 +112,7 @@ class IStream(nn.Module):
         # For Phase 1 simplicity, use single timescale
         # (multi-timescale banks will be separate arrays in Phase 4)
         avg_eta = mx.mean(eta, axis=-1, keepdims=True).reshape(batch_size, 1, 1)
-        avg_decay = mx.mean(self.decay_rates).item()
+        avg_decay = mx.mean(self.decay_rates)
         
         new_fast_weights = avg_decay * fast_weights + avg_eta * outer
         
