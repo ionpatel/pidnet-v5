@@ -185,7 +185,6 @@ public:
         tok_embed = mx::reshape(tok_embed, {batch, seq_len, d_model});
         auto pos_embed = mx::take(get_w(w, "pos_embed.weight"), positions, 0);
         auto nodes = tok_embed + pos_embed;
-        mx::eval(nodes);
         
         // Fractal bottom-up: rewrite at each level
         std::vector<mx::array> level_nodes(n_levels, mx::array(0.0f));

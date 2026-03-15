@@ -34,15 +34,8 @@ std::vector<int> generate(
         // Build input tensor
         auto input = mx::array(generated.data(), {1, seq_len}, mx::int32);
         
-        // Forward pass (GPU)
-        mx::array logits = mx::array(0.0f);
-        try {
-            logits = model.forward(input);
-            mx::eval(logits);
-        } catch (const std::exception& e) {
-            std::cerr << "Forward failed at step " << step << ": " << e.what() << std::endl;
-            break;
-        }
+        // Forward pass (GPU) — lazy eval, only materialize at sample
+        auto logits = model.forward(input);
         
         // Get last token logits: logits is [1, seq_len, vocab]
         auto last_logits = mx::reshape(
