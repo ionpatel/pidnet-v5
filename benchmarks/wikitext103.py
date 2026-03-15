@@ -61,9 +61,9 @@ def prepare():
         spm.SentencePieceTrainer.train(
             input=train_txt,
             model_prefix=tok_path,
-            vocab_size=1024,
+            vocab_size=4096,
             model_type='bpe',
-            character_coverage=1.0,
+            character_coverage=0.9995,
             byte_fallback=True,
             pad_id=3,
             input_sentence_size=1000000,
