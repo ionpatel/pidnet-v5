@@ -306,6 +306,48 @@ int main(int argc, char* argv[]) {
         mx::eval(n_norm);
         std::cout << "nodes norm = " << n_norm.item<float>() << std::endl;
         
+        // Debug first rewrite step
+        auto adj = model.build_adjacency(sl2, 1);
+        auto fw = mx::zeros({1, model.d_model, model.d_model});
+        auto pred = mx::zeros_like(dbg_nodes);
+        
+        auto p_out = model.p_stream(dbg_nodes, adj);
+        mx::eval(p_out);
+        std::cout << "\n=== P-STREAM ===" << std::endl;
+        std::cout << "p_out[0,3,:5] = ";
+        for (int i = 0; i < 5; i++) {
+            auto v = mx::slice(p_out, {0,3,i}, {1,4,i+1});
+            mx::eval(v);
+            std::cout << v.item<float>() << " ";
+        }
+        std::cout << std::endl;
+        
+        mx::array d_out = mx::array(0.0f), new_pred = mx::array(0.0f);
+        model.d_stream(dbg_nodes, pred, d_out, new_pred);
+        mx::eval(d_out);
+        std::cout << "\n=== D-STREAM ===" << std::endl;
+        std::cout << "d_out[0,3,:5] = ";
+        for (int i = 0; i < 5; i++) {
+            auto v = mx::slice(d_out, {0,3,i}, {1,4,i+1});
+            mx::eval(v);
+            std::cout << v.item<float>() << " ";
+        }
+        std::cout << std::endl;
+        
+        mx::array i_out = mx::array(0.0f), new_fw = mx::array(0.0f);
+        model.i_stream(dbg_nodes, fw, d_out, i_out, new_fw);
+        mx::eval(i_out);
+        std::cout << "\n=== I-STREAM ===" << std::endl;
+        std::cout << "i_out[0,3,:5] = ";
+        for (int i = 0; i < 5; i++) {
+            auto v = mx::slice(i_out, {0,3,i}, {1,4,i+1});
+            mx::eval(v);
+            std::cout << v.item<float>() << " ";
+        }
+        auto fw_norm = mx::sqrt(mx::sum(mx::square(new_fw)));
+        mx::eval(fw_norm);
+        std::cout << "\nfast_weights norm = " << fw_norm.item<float>() << std::endl;
+        
         auto logits = model.forward(input);
         mx::eval(logits);
         
