@@ -34,7 +34,7 @@ struct PIDDiagnostics {
  * Load safetensors weights file.
  */
 inline std::unordered_map<std::string, mx::array> load_weights(const std::string& path) {
-    return mx::load_safetensors(path);
+    return mx::load_safetensors(path).first;
 }
 
 /**
@@ -109,14 +109,9 @@ public:
         
         auto gate_input = mx::concatenate({p_mean, i_mean, d_mean, x_mean}, -1);
         
-        mx::array gate_logits;
-        if (weights.count("gate.weight")) {
-            auto w_gate = get_w("gate.weight");
-            gate_logits = mx::matmul(gate_input, mx::transpose(w_gate)) / gate_temp;
-        } else {
-            // Uniform gates if weight not found
-            gate_logits = mx::ones({batch, 1, 3}) / 3.0f;
-        }
+        auto gate_logits = weights.count("gate.weight") 
+            ? mx::matmul(gate_input, mx::transpose(get_w("gate.weight"))) / gate_temp
+            : mx::ones({batch, 1, 3}) / 3.0f;
         
         auto gates = mx::softmax(gate_logits, -1);
         gates = mx::maximum(gates, mx::array(gate_floor));
@@ -277,12 +272,9 @@ public:
         normed = normed * readout_norm_w + readout_norm_b;
         
         // Logits
-        mx::array logits;
-        if (tie_weights) {
-            logits = mx::matmul(normed, mx::transpose(embed_weight));
-        } else {
-            logits = mx::matmul(normed, mx::transpose(readout_weight));
-        }
+        auto logits = tie_weights
+            ? mx::matmul(normed, mx::transpose(embed_weight))
+            : mx::matmul(normed, mx::transpose(readout_weight));
         
         return logits;
     }
