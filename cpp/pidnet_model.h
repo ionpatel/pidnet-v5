@@ -77,11 +77,18 @@ public:
                   << w.size() << " tensors" << std::endl;
     }
     
+    // Adjacency cache: avoid rebuilding for same sequence length
+    std::unordered_map<int, mx::array> adj_cache;
+    
     /**
      * Build causal adjacency with forward AND backward edges.
-     * Matches Python _get_causal_adjacency exactly.
+     * Cached by sequence length.
      */
     mx::array build_adjacency(int N, int batch) {
+        auto it = adj_cache.find(N);
+        if (it != adj_cache.end()) {
+            return mx::broadcast_to(mx::expand_dims(it->second, 0), {batch, N, N});
+        }
         int k = std::min(connect_k, N);
         auto indices = mx::arange(N);
         auto idx_row = mx::reshape(indices, {N, 1});
@@ -105,6 +112,9 @@ public:
         auto causal = mx::tril(mx::ones({N, N}));
         adj = adj * causal;
         
+        // Cache the 2D adjacency (without batch dim)
+        mx::eval(adj);
+        adj_cache.insert_or_assign(N, adj);
         return mx::broadcast_to(mx::expand_dims(adj, 0), {batch, N, N});
     }
     
