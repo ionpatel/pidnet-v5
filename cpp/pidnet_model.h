@@ -1,9 +1,7 @@
 #pragma once
 /**
- * PID-Net Fractal Model — C++ implementation using MLX.
- * 
- * Mirrors the Python FractalPIDNet architecture.
- * All computation on GPU via MLX Metal backend. No Python.
+ * PID-Net Fractal Model — C++ inference using MLX.
+ * Weight keys matched to Python FractalPIDNet safetensors format.
  */
 
 #include <mlx/mlx.h>
@@ -15,150 +13,48 @@
 
 namespace mx = mlx::core;
 
-struct GraphState {
-    mx::array nodes = mx::array(0.0f);
-    mx::array adjacency = mx::array(0.0f);
-    mx::array fast_weights = mx::array(0.0f);
-    mx::array prediction = mx::array(0.0f);
-};
-
-struct PIDDiagnostics {
-    float p_gate = 0.0f;
-    float i_gate = 0.0f;
-    float d_gate = 0.0f;
-    float pred_error = 0.0f;
-    float energy_ratio = 1.0f;
-};
+using WeightMap = std::unordered_map<std::string, mx::array>;
 
 /**
- * Load safetensors weights file.
+ * Load safetensors and return weight map.
  */
-inline std::unordered_map<std::string, mx::array> load_weights(const std::string& path) {
+inline WeightMap load_weights(const std::string& path) {
     return mx::load_safetensors(path).first;
 }
 
 /**
- * PID Rewrite Step — the core shared rule.
+ * Helper: get weight by key, crash if missing.
  */
-class PIDRewriteStep {
-public:
-    int d_model = 0;
-    float gate_temp = 2.0f;
-    float gate_floor = 0.10f;
-    float edge_alpha = 0.3f;
-    int connect_k = 8;
-    
-    // Store all weights in a map for flexibility
-    std::unordered_map<std::string, mx::array> weights;
-    
-    void load(const std::unordered_map<std::string, mx::array>& all_weights,
-              const std::string& prefix) {
-        // Copy relevant weights using insert (not operator[] which needs default ctor)
-        for (auto& [name, arr] : all_weights) {
-            if (name.find(prefix) == 0) {
-                weights.insert_or_assign(name.substr(prefix.size()), arr);
-            }
-        }
-        
-        // Get d_model from message passing weight
-        auto it = weights.find("p_stream.message.weight");
-        if (it != weights.end()) {
-            d_model = it->second.shape(0);
-        }
-        
-        std::cout << "  Loaded PID rewrite step (d=" << d_model 
-                  << ", " << weights.size() << " weight tensors)" << std::endl;
+inline const mx::array& get_w(const WeightMap& w, const std::string& key) {
+    auto it = w.find(key);
+    if (it == w.end()) {
+        throw std::runtime_error("Missing weight: " + key);
     }
-    
-    const mx::array& get_w(const std::string& name) {
-        auto it = weights.find(name);
-        if (it != weights.end()) return it->second;
-        std::cerr << "Warning: missing weight '" << name << "'" << std::endl;
-        // Return a dummy — shouldn't reach here with correct weights
-        static mx::array dummy = mx::zeros({1});
-        return dummy;
-    }
-    
-    /**
-     * Forward pass: apply PID rewriting to graph state.
-     */
-    GraphState forward(const GraphState& state) {
-        auto nodes = state.nodes;
-        int batch = nodes.shape(0);
-        int N = nodes.shape(1);
-        int d = nodes.shape(2);
-        
-        // === P-STREAM: Message passing ===
-        auto row_sum = mx::sum(state.adjacency, std::vector<int>{-1}, true);
-        auto adj_norm = state.adjacency / mx::maximum(row_sum, mx::array(1e-8f));
-        auto messages = mx::matmul(adj_norm, nodes);
-        
-        auto w_msg = get_w("p_stream.message.weight");
-        auto p_out = nodes + mx::matmul(messages, mx::transpose(w_msg));
-        
-        // === I-STREAM: Fast weight read ===
-        auto i_out = mx::matmul(nodes, state.fast_weights);
-        
-        // === D-STREAM: Prediction error ===
-        auto error = nodes - state.prediction;
-        auto d_out = error;
-        auto new_pred = nodes;
-        
-        // === GATE ===
-        auto p_mean = mx::mean(p_out, std::vector<int>{1}, true);
-        auto i_mean = mx::mean(i_out, std::vector<int>{1}, true);
-        auto d_mean = mx::mean(d_out, std::vector<int>{1}, true);
-        auto x_mean = mx::mean(nodes, std::vector<int>{1}, true);
-        
-        auto gate_input = mx::concatenate({p_mean, i_mean, d_mean, x_mean}, -1);
-        
-        auto gate_logits = weights.count("gate.weight") 
-            ? mx::matmul(gate_input, mx::transpose(get_w("gate.weight"))) / gate_temp
-            : mx::ones({batch, 1, 3}) / 3.0f;
-        
-        auto gates = mx::softmax(gate_logits, -1);
-        gates = mx::maximum(gates, mx::array(gate_floor));
-        auto gate_sum = mx::sum(gates, std::vector<int>{-1}, true);
-        gates = gates / gate_sum;
-        
-        // Extract individual gate values via slicing
-        auto g_p = mx::slice(gates, {0, 0, 0}, {batch, 1, 1});
-        auto g_i = mx::slice(gates, {0, 0, 1}, {batch, 1, 2});
-        auto g_d = mx::slice(gates, {0, 0, 2}, {batch, 1, 3});
-        
-        auto new_nodes = g_p * p_out + g_i * i_out + g_d * d_out;
-        
-        // === ENERGY CONSERVATION ===
-        auto norm_before = mx::sqrt(mx::sum(mx::square(nodes), std::vector<int>{-1}, true) + 1e-8f);
-        auto norm_after = mx::sqrt(mx::sum(mx::square(new_nodes), std::vector<int>{-1}, true) + 1e-8f);
-        auto ratio = mx::clip(norm_before / norm_after, mx::array(0.8f), mx::array(1.2f));
-        new_nodes = new_nodes * ratio;
-        
-        // === EDGE EVOLUTION ===
-        auto combined = nodes + 0.5f * i_out + 0.5f * d_out;
-        auto affinity = mx::matmul(combined, mx::transpose(combined, {0, 2, 1}));
-        affinity = affinity / std::sqrt(static_cast<float>(d));
-        auto new_edges = mx::sigmoid(affinity);
-        
-        // Causal mask
-        auto causal = mx::tril(mx::ones({N, N}));
-        new_edges = new_edges * causal;
-        
-        // Blend
-        auto evolved = (1.0f - edge_alpha) * state.adjacency + edge_alpha * new_edges;
-        
-        GraphState new_state;
-        new_state.nodes = new_nodes;
-        new_state.adjacency = evolved;
-        new_state.fast_weights = state.fast_weights;
-        new_state.prediction = new_pred;
-        
-        return new_state;
-    }
-};
+    return it->second;
+}
 
 /**
- * Fractal PID-Net — full model.
+ * Helper: get weight by key, return fallback if missing.
+ */
+inline mx::array get_w_or(const WeightMap& w, const std::string& key, const mx::array& fallback) {
+    auto it = w.find(key);
+    return (it != w.end()) ? it->second : fallback;
+}
+
+/**
+ * LayerNorm using weight/bias from weight map.
+ */
+inline mx::array layer_norm(const mx::array& x, const mx::array& weight, const mx::array& bias) {
+    auto mean = mx::mean(x, std::vector<int>{-1}, true);
+    auto var = mx::var(x, std::vector<int>{-1}, true);
+    auto normed = (x - mean) / mx::sqrt(var + 1e-5f);
+    return normed * weight + bias;
+}
+
+/**
+ * Fractal PID-Net — direct weight-map forward pass.
+ * No class hierarchy — just functions operating on the weight map.
+ * This matches the Python model's computation exactly.
  */
 class FractalPIDNet {
 public:
@@ -169,16 +65,9 @@ public:
     int chunk_size = 16;
     int n_levels = 3;
     bool tie_weights = false;
+    WeightMap w;
     
-    mx::array embed_weight = mx::array(0.0f);
-    mx::array pos_embed_weight = mx::array(0.0f);
-    mx::array readout_norm_w = mx::array(0.0f);
-    mx::array readout_norm_b = mx::array(0.0f);
-    mx::array readout_weight = mx::array(0.0f);
-    
-    PIDRewriteStep rewrite_step;
-    
-    void load(const std::string& weights_path, int vocab, int d, int max_n,
+    void load(const std::string& path, int vocab, int d, int max_n,
               int n_steps = 3, int chunk = 16, int levels = 3) {
         vocab_size = vocab;
         d_model = d;
@@ -188,33 +77,103 @@ public:
         n_levels = levels;
         tie_weights = (vocab > 1000);
         
-        auto weights = load_weights(weights_path);
-        
-        std::cout << "Loading PID-Net (vocab=" << vocab << ", d=" << d 
-                  << ", levels=" << levels << ")" << std::endl;
-        
-        // Load embeddings
-        embed_weight = weights.at("embed.weight");
-        pos_embed_weight = weights.at("pos_embed.weight");
-        readout_norm_w = weights.at("readout_norm.weight");
-        readout_norm_b = weights.at("readout_norm.bias");
-        
-        if (!tie_weights && weights.count("readout.weight")) {
-            readout_weight = weights.at("readout.weight");
-        }
-        
-        // Load PID rewrite step
-        rewrite_step.load(weights, "rewrite_step.");
+        w = load_weights(path);
         
         int total = 0;
-        for (auto& [name, arr] : weights) {
+        for (auto& [name, arr] : w) {
             total += arr.size();
         }
-        std::cout << "Total parameters: " << total << std::endl;
+        std::cout << "Loaded PID-Net: " << total << " params, " 
+                  << w.size() << " tensors" << std::endl;
     }
     
     /**
-     * Forward pass: tokens → logits.
+     * PID rewrite step using actual weight keys.
+     */
+    mx::array pid_rewrite(mx::array nodes, mx::array adj, mx::array fast_weights,
+                          mx::array prediction) {
+        int batch = nodes.shape(0);
+        int N = nodes.shape(1);
+        int d = nodes.shape(2);
+        std::string pre = "rewrite_step.";
+        
+        // === P-STREAM ===
+        auto row_sum = mx::sum(adj, std::vector<int>{-1}, true);
+        auto adj_norm = adj / mx::maximum(row_sum, mx::array(1e-8f));
+        auto messages = mx::matmul(adj_norm, nodes);
+        auto w_msg = get_w(w, pre + "p_stream.message_pass.W_msg.weight");
+        auto p_raw = nodes + mx::matmul(messages, mx::transpose(w_msg));
+        // P norm + proj
+        auto p_normed = layer_norm(p_raw,
+            get_w(w, pre + "p_stream.message_pass.norm.weight"),
+            get_w(w, pre + "p_stream.message_pass.norm.bias"));
+        auto p_out = mx::matmul(p_normed, mx::transpose(get_w(w, pre + "p_stream.proj.weight")))
+                     + get_w(w, pre + "p_stream.proj.bias");
+        
+        // === I-STREAM ===
+        auto i_read = mx::matmul(nodes, fast_weights);
+        auto i_combined = mx::concatenate({nodes, i_read, nodes * i_read, nodes - i_read}, -1);
+        auto i_raw = mx::matmul(i_combined, mx::transpose(get_w(w, pre + "i_stream.W_combine.weight")))
+                     + get_w(w, pre + "i_stream.W_combine.bias");
+        auto i_normed = layer_norm(i_raw,
+            get_w(w, pre + "i_stream.norm.weight"),
+            get_w(w, pre + "i_stream.norm.bias"));
+        auto i_out = mx::matmul(i_normed, mx::transpose(get_w(w, pre + "i_stream.proj.weight")))
+                     + get_w(w, pre + "i_stream.proj.bias");
+        
+        // === D-STREAM ===
+        auto error = nodes - prediction;
+        auto d_err = mx::matmul(error, mx::transpose(get_w(w, pre + "d_stream.W_err.weight")))
+                     + get_w(w, pre + "d_stream.W_err.bias");
+        auto d_normed = layer_norm(d_err,
+            get_w(w, pre + "d_stream.norm.weight"),
+            get_w(w, pre + "d_stream.norm.bias"));
+        auto d_out = mx::matmul(d_normed, mx::transpose(get_w(w, pre + "d_stream.proj.weight")))
+                     + get_w(w, pre + "d_stream.proj.bias");
+        
+        // New prediction (2-layer MLP)
+        auto pred_h = mx::matmul(nodes, mx::transpose(get_w(w, pre + "d_stream.predictor.layers.0.weight")))
+                      + get_w(w, pre + "d_stream.predictor.layers.0.bias");
+        pred_h = mx::maximum(pred_h, mx::array(0.0f)); // ReLU
+        auto new_pred = mx::matmul(pred_h, mx::transpose(get_w(w, pre + "d_stream.predictor.layers.2.weight")))
+                        + get_w(w, pre + "d_stream.predictor.layers.2.bias");
+        
+        // === GATE ===
+        auto p_mean = mx::mean(p_out, std::vector<int>{1}, true);
+        auto i_mean = mx::mean(i_out, std::vector<int>{1}, true);
+        auto d_mean = mx::mean(d_out, std::vector<int>{1}, true);
+        auto x_mean = mx::mean(nodes, std::vector<int>{1}, true);
+        auto gate_in = mx::concatenate({p_mean, i_mean, d_mean, x_mean}, -1);
+        
+        auto gate_logits = mx::matmul(gate_in, mx::transpose(get_w(w, pre + "gate.W_blend.weight")))
+                           + get_w(w, pre + "gate.W_blend.bias");
+        auto gates = mx::softmax(gate_logits / 2.0f, -1); // temp=2.0
+        gates = mx::maximum(gates, mx::array(0.10f));
+        gates = gates / mx::sum(gates, std::vector<int>{-1}, true);
+        
+        // Weighted combination: gates is [batch, 1, 3]
+        auto g_p = mx::slice(gates, {0, 0, 0}, {batch, 1, 1});
+        auto g_i = mx::slice(gates, {0, 0, 1}, {batch, 1, 2});
+        auto g_d = mx::slice(gates, {0, 0, 2}, {batch, 1, 3});
+        
+        auto new_nodes = g_p * p_out + g_i * i_out + g_d * d_out;
+        
+        // Post-norm
+        new_nodes = layer_norm(new_nodes,
+            get_w(w, pre + "norm.weight"),
+            get_w(w, pre + "norm.bias"));
+        
+        // Energy conservation
+        auto norm_before = mx::sqrt(mx::sum(mx::square(nodes), std::vector<int>{-1}, true) + 1e-8f);
+        auto norm_after = mx::sqrt(mx::sum(mx::square(new_nodes), std::vector<int>{-1}, true) + 1e-8f);
+        auto ratio = mx::clip(norm_before / norm_after, mx::array(0.8f), mx::array(1.2f));
+        new_nodes = new_nodes * ratio;
+        
+        return new_nodes;
+    }
+    
+    /**
+     * Forward pass: tokens → last-token logits.
      */
     mx::array forward(const mx::array& tokens) {
         int batch = tokens.shape(0);
@@ -222,21 +181,21 @@ public:
         
         // Embed
         auto positions = mx::arange(seq_len);
-        auto tok_embed = mx::take(embed_weight, mx::reshape(tokens, {-1}), 0);
+        auto tok_embed = mx::take(get_w(w, "embed.weight"), mx::reshape(tokens, {-1}), 0);
         tok_embed = mx::reshape(tok_embed, {batch, seq_len, d_model});
-        auto pos_embed = mx::take(pos_embed_weight, positions, 0);
+        auto pos_embed = mx::take(get_w(w, "pos_embed.weight"), positions, 0);
         auto nodes = tok_embed + pos_embed;
         
-        // Fractal bottom-up
+        // Fractal bottom-up: rewrite at each level
+        std::vector<mx::array> level_nodes;
+        level_nodes.push_back(nodes);
+        
+        auto current = nodes;
         for (int level = 0; level < n_levels; level++) {
-            int N = nodes.shape(1);
+            int N = current.shape(1);
             
-            // Build graph state
-            GraphState state;
-            state.nodes = nodes;
-            
-            // Initial causal adjacency
-            int k = std::min(rewrite_step.connect_k, N);
+            // Causal adjacency
+            int k = std::min(8, N);
             auto indices = mx::arange(N);
             auto idx_row = mx::reshape(indices, {N, 1});
             auto idx_col = mx::reshape(indices, {1, N});
@@ -244,39 +203,47 @@ public:
             auto valid = (dist > mx::array(0.0f)) & (dist <= mx::array(static_cast<float>(k)));
             auto safe_dist = mx::maximum(dist, mx::array(1.0f));
             auto adj = mx::where(valid, mx::array(1.0f) / safe_dist, mx::array(0.0f));
-            
-            // Broadcast to batch
             adj = mx::broadcast_to(mx::expand_dims(adj, 0), {batch, N, N});
-            state.adjacency = adj;
-            state.fast_weights = mx::zeros({batch, d_model, d_model});
-            state.prediction = mx::zeros_like(nodes);
             
-            // R rounds of PID rewriting
+            auto fast_weights = mx::zeros({batch, d_model, d_model});
+            auto prediction = mx::zeros_like(current);
+            
+            // R rewrite steps (SHARED weights)
             for (int r = 0; r < n_rewrite_steps; r++) {
-                state = rewrite_step.forward(state);
+                current = pid_rewrite(current, adj, fast_weights, prediction);
             }
             
-            nodes = state.nodes;
+            level_nodes[level] = current;
             
             // Pool to next level
             if (level < n_levels - 1 && N >= chunk_size * 2) {
                 int n_chunks = N / chunk_size;
-                nodes = mx::reshape(nodes, {batch, n_chunks, chunk_size, d_model});
-                nodes = mx::mean(nodes, std::vector<int>{2});
+                // Learned pooling
+                std::string pool_pre = "pools." + std::to_string(level) + ".";
+                auto pooled = mx::reshape(current, {batch, n_chunks, chunk_size, d_model});
+                pooled = mx::mean(pooled, std::vector<int>{2}); // Mean pool
+                pooled = layer_norm(pooled,
+                    get_w(w, pool_pre + "norm.weight"),
+                    get_w(w, pool_pre + "norm.bias"));
+                pooled = mx::matmul(pooled, mx::transpose(get_w(w, pool_pre + "pool_proj.weight")))
+                         + get_w(w, pool_pre + "pool_proj.bias");
+                current = pooled;
+                level_nodes.push_back(current);
             }
         }
         
-        // LayerNorm
-        auto mean = mx::mean(nodes, std::vector<int>{-1}, true);
-        auto var = mx::var(nodes, std::vector<int>{-1}, true);
-        auto normed = (nodes - mean) / mx::sqrt(var + 1e-5f);
-        normed = normed * readout_norm_w + readout_norm_b;
+        // Readout from level 0
+        auto final_nodes = level_nodes[0];
+        auto normed = layer_norm(final_nodes,
+            get_w(w, "readout_norm.weight"),
+            get_w(w, "readout_norm.bias"));
         
-        // Logits
-        auto logits = tie_weights
-            ? mx::matmul(normed, mx::transpose(embed_weight))
-            : mx::matmul(normed, mx::transpose(readout_weight));
+        mx::array logits = tie_weights
+            ? mx::matmul(normed, mx::transpose(get_w(w, "embed.weight")))
+            : mx::matmul(normed, mx::transpose(get_w(w, "readout.weight")))
+              + get_w(w, "readout.bias");
         
-        return logits;
+        // Return only last token logits
+        return mx::slice(logits, {0, seq_len - 1, 0}, {1, seq_len, vocab_size});
     }
 };
