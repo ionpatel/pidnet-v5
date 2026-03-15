@@ -259,6 +259,46 @@ int main(int argc, char* argv[]) {
         
         benchmark(model, max_tokens, runs);
         
+    } else if (command == "debug") {
+        // Compare logits with Python
+        std::vector<int> prompt_enc = (vocab <= 128) 
+            ? encode_text(prompt_text) 
+            : std::vector<int>{0, 1, 2, 3};
+        
+        std::cout << "Prompt: \"" << prompt_text << "\" tokens=[";
+        for (size_t i = 0; i < prompt_enc.size(); i++) {
+            std::cout << prompt_enc[i];
+            if (i < prompt_enc.size() - 1) std::cout << ",";
+        }
+        std::cout << "]" << std::endl;
+        
+        auto input = mx::array(prompt_enc.data(), 
+            {1, static_cast<int>(prompt_enc.size())}, mx::int32);
+        auto logits = model.forward(input);
+        mx::eval(logits);
+        
+        int sl = static_cast<int>(prompt_enc.size());
+        auto last = mx::reshape(
+            mx::slice(logits, {0, sl-1, 0}, {1, sl, model.vocab_size}),
+            {model.vocab_size}
+        );
+        mx::eval(last);
+        
+        std::cout << "Last token logits (first 10):" << std::endl;
+        for (int i = 0; i < 10; i++) {
+            auto val = mx::slice(last, {i}, {i+1});
+            mx::eval(val);
+            std::cout << "  [" << i << "] = " << val.item<float>() << std::endl;
+        }
+        
+        auto max_val = mx::max(last);
+        auto min_val = mx::min(last);
+        auto argmax_val = mx::argmax(last);
+        mx::eval(max_val); mx::eval(min_val); mx::eval(argmax_val);
+        std::cout << "  max=" << max_val.item<float>() 
+                  << " min=" << min_val.item<float>()
+                  << " argmax=" << argmax_val.item<int>() << std::endl;
+        
     } else {
         print_usage();
         return 1;
