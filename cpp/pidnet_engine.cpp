@@ -14,6 +14,17 @@
 const std::string SHAKESPEARE_CHARS = 
     "\n !$&',-.3:;?ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
+std::vector<int> encode_text(const std::string& text) {
+    std::vector<int> tokens;
+    for (char c : text) {
+        auto pos = SHAKESPEARE_CHARS.find(c);
+        if (pos != std::string::npos) {
+            tokens.push_back(static_cast<int>(pos));
+        }
+    }
+    return tokens;
+}
+
 std::string decode_tokens(const std::vector<int>& tokens, int vocab_size) {
     std::string result;
     if (vocab_size <= 128) {
@@ -181,11 +192,12 @@ int main(int argc, char* argv[]) {
     
     // Parse args
     std::string model_path;
+    std::string prompt_text = "KING RICHARD";
     int max_tokens = 50;
     float temperature = 0.8f;
     int top_k = 50;
     float penalty = 1.5f;
-    int vocab = 65;  // Default to Shakespeare char-level
+    int vocab = 65;
     int d_model = 384;
     int seq_len = 256;
     int levels = 3;
@@ -194,6 +206,7 @@ int main(int argc, char* argv[]) {
     for (int i = 2; i < argc; i++) {
         std::string arg = argv[i];
         if (arg == "--model" && i + 1 < argc) model_path = argv[++i];
+        else if (arg == "--prompt" && i + 1 < argc) prompt_text = argv[++i];
         else if (arg == "--tokens" && i + 1 < argc) max_tokens = std::stoi(argv[++i]);
         else if (arg == "--vocab" && i + 1 < argc) vocab = std::stoi(argv[++i]);
         else if (arg == "--d-model" && i + 1 < argc) d_model = std::stoi(argv[++i]);
@@ -217,9 +230,11 @@ int main(int argc, char* argv[]) {
     }
     
     if (command == "generate") {
-        std::cout << "\nGenerating " << max_tokens << " tokens...\n" << std::endl;
+        auto prompt = (vocab <= 128) ? encode_text(prompt_text) : std::vector<int>{0, 1, 2, 3, 4};
+        if (prompt.empty()) prompt = {0};
         
-        std::vector<int> prompt = {0, 1, 2, 3, 4};
+        std::cout << "\nPrompt: \"" << prompt_text << "\" (" << prompt.size() << " tokens)\n"
+                  << "Generating " << max_tokens << " tokens...\n" << std::endl;
         
         auto start = high_resolution_clock::now();
         auto output = generate(model, prompt, max_tokens, temperature, top_k, penalty);
