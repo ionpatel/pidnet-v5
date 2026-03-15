@@ -37,9 +37,11 @@ std::vector<int> generate(
         // Forward pass (GPU)
         auto logits = model.forward(input);
         
-        // Get last token logits
-        auto last_logits = mx::slice(logits, {0, seq_len - 1, 0}, {1, seq_len, model.vocab_size});
-        last_logits = mx::reshape(last_logits, {model.vocab_size});
+        // Get last token logits: logits is [1, seq_len, vocab]
+        auto last_logits = mx::reshape(
+            mx::slice(logits, {0, seq_len - 1, 0}, {1, seq_len, model.vocab_size}),
+            {model.vocab_size}
+        );
         
         // Frequency-based repetition penalty
         if (rep_penalty > 1.0f) {

@@ -243,7 +243,6 @@ public:
             : mx::matmul(normed, mx::transpose(get_w(w, "readout.weight")))
               + get_w(w, "readout.bias");
         
-        // Return only last token logits
-        return mx::slice(logits, {0, seq_len - 1, 0}, {1, seq_len, vocab_size});
+        return logits;  // [batch, seq_len, vocab_size]
     }
 };
