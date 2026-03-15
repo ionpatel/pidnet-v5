@@ -186,14 +186,31 @@ public:
     ) {
         std::string pre = "rewrite_step.d_stream.";
         
-        auto error = nodes - prediction;
-        auto d_err = linear(w, pre + "W_err", error);
-        auto d_normed = ln(w, pre + "norm", d_err);
-        d_out = linear(w, pre + "proj", d_normed);
+        auto epsilon = nodes - prediction;
         
-        // New prediction (2-layer MLP with ReLU)
+        // Stagnation kickout (simplified — full version has diversity detection)
+        auto kickout = linear(w, pre + "kickout_proj", nodes);
+        auto kickout_strength = mx::sigmoid(linear(w, pre + "kickout_gate", nodes));
+        // Diversity: cosine similarity between consecutive nodes
+        int N = nodes.shape(1);
+        auto shifted = mx::concatenate({mx::zeros({nodes.shape(0), 1, nodes.shape(2)}), 
+                                         mx::slice(nodes, {0,0,0}, {nodes.shape(0), N-1, nodes.shape(2)})}, 1);
+        auto nodes_norm = mx::sqrt(mx::sum(mx::square(nodes), std::vector<int>{-1}, true) + 1e-8f);
+        auto shifted_norm = mx::sqrt(mx::sum(mx::square(shifted), std::vector<int>{-1}, true) + 1e-8f);
+        auto neighbor_cos = mx::sum(nodes * shifted, std::vector<int>{-1}, true) / (nodes_norm * shifted_norm);
+        auto stagnation = mx::sigmoid((neighbor_cos - 0.999f) * 500.0f);
+        auto gated_kickout = stagnation * kickout_strength * kickout;
+        auto diff = nodes - shifted;
+        auto diversity_penalty = linear_nb(w, pre + "diversity_proj", diff) * stagnation;
+        epsilon = epsilon + gated_kickout + diversity_penalty * 0.5f;
+        
+        // W_err → proj → norm (correct order!)
+        auto d_signal = linear(w, pre + "W_err", epsilon);
+        d_out = ln(w, pre + "norm", linear(w, pre + "proj", d_signal));
+        
+        // New prediction (2-layer MLP with GELU, not ReLU!)
         auto pred_h = linear(w, pre + "predictor.layers.0", nodes);
-        pred_h = mx::maximum(pred_h, mx::array(0.0f));
+        pred_h = pred_h * mx::sigmoid(pred_h * 1.702f);  // GELU
         new_pred = linear(w, pre + "predictor.layers.2", pred_h);
     }
     
