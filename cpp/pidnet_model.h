@@ -123,12 +123,13 @@ public:
     
     /**
      * I-Stream: Fast weight associative memory with D→I coupling.
-     * Returns (i_output, new_fast_weights).
      */
-    std::pair<mx::array, mx::array> i_stream(
+    void i_stream(
         const mx::array& nodes,
         const mx::array& fast_weights,
-        const mx::array& d_signal
+        const mx::array& d_signal,
+        mx::array& output,
+        mx::array& new_fw_out
     ) {
         std::string pre = "rewrite_step.i_stream.";
         int batch = nodes.shape(0);
@@ -163,32 +164,30 @@ public:
         auto retrieved = mx::matmul(queries, mx::transpose(new_fw, {0, 2, 1})); // [batch, N, d]
         
         // Project and normalize
-        auto output = ln(w, pre + "norm", linear(w, pre + "proj", retrieved));
-        
-        return {output, new_fw};
+        output = ln(w, pre + "norm", linear(w, pre + "proj", retrieved));
+        new_fw_out = new_fw;
     }
     
     /**
      * D-Stream: Prediction error (surprise).
-     * Returns (d_output, new_prediction).
      */
-    std::pair<mx::array, mx::array> d_stream(
+    void d_stream(
         const mx::array& nodes,
-        const mx::array& prediction
+        const mx::array& prediction,
+        mx::array& d_out,
+        mx::array& new_pred
     ) {
         std::string pre = "rewrite_step.d_stream.";
         
         auto error = nodes - prediction;
         auto d_err = linear(w, pre + "W_err", error);
         auto d_normed = ln(w, pre + "norm", d_err);
-        auto d_out = linear(w, pre + "proj", d_normed);
+        d_out = linear(w, pre + "proj", d_normed);
         
         // New prediction (2-layer MLP with ReLU)
         auto pred_h = linear(w, pre + "predictor.layers.0", nodes);
         pred_h = mx::maximum(pred_h, mx::array(0.0f));
-        auto new_pred = linear(w, pre + "predictor.layers.2", pred_h);
-        
-        return {d_out, new_pred};
+        new_pred = linear(w, pre + "predictor.layers.2", pred_h);
     }
     
     /**
@@ -241,10 +240,20 @@ public:
         const mx::array& fast_weights, const mx::array& prediction
     ) {
         auto p_out = p_stream(nodes, adj);
-        auto [d_out, new_pred] = d_stream(nodes, prediction);
-        auto [i_out, new_fw] = i_stream(nodes, fast_weights, d_out);
+        
+        mx::array d_out = mx::array(0.0f), new_pred = mx::array(0.0f);
+        d_stream(nodes, prediction, d_out, new_pred);
+        
+        mx::array i_out = mx::array(0.0f), new_fw = mx::array(0.0f);
+        i_stream(nodes, fast_weights, d_out, i_out, new_fw);
+        
         auto new_nodes = gate_blend(p_out, i_out, d_out, nodes);
-        return {new_nodes, new_fw, new_pred};
+        
+        RewriteState result;
+        result.nodes = new_nodes;
+        result.fast_weights = new_fw;
+        result.prediction = new_pred;
+        return result;
     }
     
     /**
