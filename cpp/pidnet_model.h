@@ -113,12 +113,19 @@ public:
      */
     mx::array p_stream(const mx::array& nodes, const mx::array& adj) {
         std::string pre = "rewrite_step.p_stream.";
-        auto row_sum = mx::sum(adj, std::vector<int>{-1}, true);
-        auto adj_norm = adj / mx::maximum(row_sum, mx::array(1e-8f));
-        auto messages = mx::matmul(adj_norm, nodes);
-        auto p_raw = nodes + linear_nb(w, pre + "message_pass.W_msg", messages);
-        p_raw = ln(w, pre + "message_pass.norm", p_raw);
-        return linear(w, pre + "proj", p_raw);
+        // 1. Transform nodes FIRST
+        auto transformed = linear_nb(w, pre + "message_pass.W_msg", nodes);
+        // 2. Aggregate transformed features via adjacency
+        auto row_sum = mx::sum(adj, std::vector<int>{-1}, true) + 1e-8f;
+        auto adj_norm = adj / row_sum;
+        auto messages = mx::matmul(adj_norm, transformed);
+        // 3. Residual + norm
+        auto perceived = ln(w, pre + "message_pass.norm", nodes + messages);
+        // 4. Project with GELU activation
+        auto output = linear(w, pre + "proj", perceived);
+        // GELU approximation: x * sigmoid(1.702 * x)
+        output = output * mx::sigmoid(output * 1.702f);
+        return output;
     }
     
     /**
