@@ -53,27 +53,30 @@ public:
     
     void load(const std::unordered_map<std::string, mx::array>& all_weights,
               const std::string& prefix) {
-        // Copy relevant weights
+        // Copy relevant weights using insert (not operator[] which needs default ctor)
         for (auto& [name, arr] : all_weights) {
             if (name.find(prefix) == 0) {
-                weights[name.substr(prefix.size())] = arr;
+                weights.insert_or_assign(name.substr(prefix.size()), arr);
             }
         }
         
         // Get d_model from message passing weight
-        if (weights.count("p_stream.message.weight")) {
-            d_model = weights["p_stream.message.weight"].shape()[0];
+        auto it = weights.find("p_stream.message.weight");
+        if (it != weights.end()) {
+            d_model = it->second.shape(0);
         }
         
         std::cout << "  Loaded PID rewrite step (d=" << d_model 
                   << ", " << weights.size() << " weight tensors)" << std::endl;
     }
     
-    mx::array get_w(const std::string& name) {
+    const mx::array& get_w(const std::string& name) {
         auto it = weights.find(name);
         if (it != weights.end()) return it->second;
         std::cerr << "Warning: missing weight '" << name << "'" << std::endl;
-        return mx::zeros({d_model, d_model});
+        // Return a dummy — shouldn't reach here with correct weights
+        static mx::array dummy = mx::zeros({1});
+        return dummy;
     }
     
     /**
