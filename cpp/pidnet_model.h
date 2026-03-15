@@ -179,12 +179,16 @@ public:
         int batch = tokens.shape(0);
         int seq_len = tokens.shape(1);
         
+        std::cerr << "[fwd] batch=" << batch << " seq=" << seq_len << std::endl;
+        
         // Embed
         auto positions = mx::arange(seq_len);
         auto tok_embed = mx::take(get_w(w, "embed.weight"), mx::reshape(tokens, {-1}), 0);
         tok_embed = mx::reshape(tok_embed, {batch, seq_len, d_model});
         auto pos_embed = mx::take(get_w(w, "pos_embed.weight"), positions, 0);
         auto nodes = tok_embed + pos_embed;
+        mx::eval(nodes);
+        std::cerr << "[fwd] embed OK" << std::endl;
         
         // Fractal bottom-up: rewrite at each level
         std::vector<mx::array> level_nodes;
@@ -208,9 +212,14 @@ public:
             auto fast_weights = mx::zeros({batch, d_model, d_model});
             auto prediction = mx::zeros_like(current);
             
+            mx::eval(adj);
+            std::cerr << "[fwd] level " << level << " adj OK (N=" << N << ")" << std::endl;
+            
             // R rewrite steps (SHARED weights)
             for (int r = 0; r < n_rewrite_steps; r++) {
                 current = pid_rewrite(current, adj, fast_weights, prediction);
+                mx::eval(current);
+                std::cerr << "[fwd] rewrite step " << r << " OK" << std::endl;
             }
             
             level_nodes[level] = current;
@@ -232,11 +241,20 @@ public:
             }
         }
         
+        std::cerr << "[fwd] all levels done" << std::endl;
+        
         // Readout from level 0
         auto final_nodes = level_nodes[0];
-        auto normed = layer_norm(final_nodes,
-            get_w(w, "readout_norm.weight"),
-            get_w(w, "readout_norm.bias"));
+        std::cerr << "[fwd] final_nodes shape: " << final_nodes.shape(0) << "x" 
+                  << final_nodes.shape(1) << "x" << final_nodes.shape(2) << std::endl;
+        
+        // Check if readout_norm exists
+        bool has_rn = w.find("readout_norm.weight") != w.end();
+        std::cerr << "[fwd] has readout_norm: " << has_rn << std::endl;
+        
+        auto normed = has_rn 
+            ? layer_norm(final_nodes, get_w(w, "readout_norm.weight"), get_w(w, "readout_norm.bias"))
+            : final_nodes;
         
         mx::array logits = tie_weights
             ? mx::matmul(normed, mx::transpose(get_w(w, "embed.weight")))
