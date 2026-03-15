@@ -301,36 +301,33 @@ class FractalPIDNet(nn.Module):
     def _apply_penalties_gpu(
         self, 
         logits: mx.array,
-        recent_tokens: mx.array,
+        recent_tokens: list,
         penalty: float,
         temperature: float,
         top_k: int,
     ) -> mx.array:
-        """Apply repetition penalty + sampling on GPU (no Python loops).
+        """Apply repetition penalty + temperature + top-k.
         
-        Instead of Python dict/Counter, we compute frequency counts
-        as GPU tensor operations. ~10x faster than Python loop.
+        Uses frequency-based penalty: penalty^count.
+        Penalty computation is lightweight (32 tokens max),
+        the real speedup comes from mx.compile on the forward pass.
         """
         vocab_size = logits.shape[-1]
         
-        # Build frequency vector on GPU: count occurrences of each token
-        # One-hot encode recent tokens and sum → frequency per vocab entry
-        if recent_tokens.shape[0] > 0:
-            one_hot = mx.zeros((recent_tokens.shape[0], vocab_size))
-            one_hot = mx.scatter(
-                one_hot, 
-                recent_tokens[:, None],
-                mx.ones_like(recent_tokens[:, None], dtype=mx.float32),
-                axes=[1]
-            )
-            freq_counts = mx.sum(one_hot, axis=0)  # [vocab_size]
-            
-            # penalty^count for each vocab entry (0 count → penalty^0 = 1.0, no effect)
-            penalties = mx.power(penalty, freq_counts)
-            
-            # Apply: positive logits divided, negative logits multiplied
-            pos_mask = logits > 0
-            logits = mx.where(pos_mask, logits / penalties, logits * penalties)
+        # Frequency-based repetition penalty
+        if penalty > 1.0 and len(recent_tokens) > 0:
+            from collections import Counter
+            freq = Counter(recent_tokens)
+            for token_id, count in freq.items():
+                if token_id < vocab_size:
+                    val = logits[token_id]
+                    pen = penalty ** count
+                    pos = val > 0
+                    logits = mx.where(
+                        mx.arange(vocab_size) == token_id,
+                        mx.where(pos, logits / pen, logits * pen),
+                        logits,
+                    )
         
         # Temperature
         logits = logits / temperature
@@ -386,8 +383,8 @@ class FractalPIDNet(nn.Module):
             input_tokens = mx.array([generated])
             last_logits = forward_fn(input_tokens)[0]  # [vocab_size]
             
-            # GPU-based repetition penalty
-            recent = mx.array(generated[-penalty_window:]) if len(generated) > 0 else mx.array([], dtype=mx.int32)
+            # Repetition penalty + temperature + top-k
+            recent = generated[-penalty_window:]
             last_logits = self._apply_penalties_gpu(
                 last_logits, recent, repetition_penalty, temperature, top_k
             )
