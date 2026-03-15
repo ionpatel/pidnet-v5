@@ -35,7 +35,14 @@ std::vector<int> generate(
         auto input = mx::array(generated.data(), {1, seq_len}, mx::int32);
         
         // Forward pass (GPU)
-        auto logits = model.forward(input);
+        mx::array logits = mx::array(0.0f);
+        try {
+            logits = model.forward(input);
+            mx::eval(logits);
+        } catch (const std::exception& e) {
+            std::cerr << "Forward failed at step " << step << ": " << e.what() << std::endl;
+            break;
+        }
         
         // Get last token logits: logits is [1, seq_len, vocab]
         auto last_logits = mx::reshape(
@@ -99,7 +106,13 @@ void benchmark(FractalPIDNet& model, int n_tokens, int n_runs) {
     
     // Warmup
     std::cout << "  Warmup..." << std::endl;
-    auto warmup = generate(model, prompt, 5, 0.8f, 50, 1.5f);
+    try {
+        auto warmup = generate(model, prompt, 5, 0.8f, 50, 1.5f);
+        std::cout << "  Warmup OK" << std::endl;
+    } catch (const std::exception& e) {
+        std::cerr << "  Warmup failed: " << e.what() << std::endl;
+        return;
+    }
     
     std::vector<double> times;
     
