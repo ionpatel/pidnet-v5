@@ -50,46 +50,46 @@ enum class GeneType : uint8_t {
     CUSTOM      = 6,  // gene-defined computation
 };
 
-struct __attribute__((packed, aligned(64))) GenomeHeader {
+struct __attribute__((packed)) GenomeHeader {
     uint32_t magic;           // "GENO" = 0x4F4E4547
     uint32_t version;
     uint32_t n_chromosomes;
     uint32_t n_genes;
     uint32_t d_model;
-    uint32_t vocab_size;
+    uint32_t vocab_size;      // 6 × 4 = 24 bytes
     uint64_t genome_length;   // total file size
     uint64_t gene_data_offset;
     uint64_t epigenetic_offset;
     uint64_t regulation_offset;
-    uint64_t checksum;
-    uint8_t  _pad[8];         // pad to 64 bytes
+    uint64_t checksum;        // 5 × 8 = 40 bytes
+    // Total: 24 + 40 = 64 bytes exactly
 };
 static_assert(sizeof(GenomeHeader) == 64, "Header must be 1 cache line");
 
-struct __attribute__((packed, aligned(64))) Chromosome {
+struct __attribute__((packed)) Chromosome {
     uint32_t id;
     uint32_t gene_start;      // index of first gene
     uint32_t gene_count;
-    ChromosomeFunction function;
-    uint64_t data_offset;     // byte offset to chromosome's gene data
-    uint64_t data_size;
-    uint8_t  _pad[32];       // pad to 64 bytes
+    ChromosomeFunction function;  // 4 × 4 = 16
+    uint64_t data_offset;
+    uint64_t data_size;           // 2 × 8 = 16, total = 32
+    uint8_t  _pad[32];           // pad to 64
 };
 static_assert(sizeof(Chromosome) == 64, "Chromosome must be 1 cache line");
 
-struct __attribute__((packed, aligned(64))) GeneDescriptor {
-    uint32_t id;
-    uint32_t chromosome;      // which chromosome this gene belongs to
-    uint64_t data_offset;     // byte offset to weight data
-    uint32_t data_size;       // size in bytes
-    uint16_t d_in;
-    uint16_t d_out;
-    GeneType gene_type;
-    uint8_t  active;          // 1 = can be expressed, 0 = silenced
-    uint16_t expression_threshold; // f16: minimum transcription factor to express
-    uint32_t regulates[4];    // gene IDs this gene regulates (regulatory network)
-    uint16_t regulation_weights[4]; // f16: how strongly it regulates each target
-    uint8_t  _pad[10];       // pad to 64 bytes
+struct __attribute__((packed)) GeneDescriptor {
+    uint32_t id;              // 4
+    uint32_t chromosome;      // 4
+    uint64_t data_offset;     // 8
+    uint32_t data_size;       // 4
+    uint16_t d_in;            // 2
+    uint16_t d_out;           // 2
+    GeneType gene_type;       // 1
+    uint8_t  active;          // 1
+    uint16_t expression_threshold; // 2  → subtotal: 28
+    uint32_t regulates[4];    // 16 → 44
+    uint16_t regulation_weights[4]; // 8 → 52
+    uint8_t  _pad[12];       // 12 → 64
 };
 static_assert(sizeof(GeneDescriptor) == 64, "Gene must be 1 cache line");
 
