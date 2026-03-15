@@ -77,8 +77,8 @@ std::vector<int> generate(
         // Build input tensor
         auto input = mx::array(generated.data(), {1, seq_len}, mx::int32);
         
-        // Forward pass — uses cache when available
-        auto logits = model.forward_incremental(input);
+        // Full forward (incremental cache hurts quality — skips multi-level)
+        auto logits = model.forward(input);
         
         // Get last token logits: logits is [1, seq_len, vocab]
         auto last_logits = mx::reshape(
