@@ -329,7 +329,8 @@ public:
         }
         
         // === TOP-DOWN: Broadcast higher-level context ===
-        for (int level = static_cast<int>(level_nodes.size()) - 1; level > 0; level--) {
+        int max_broadcast = std::min(static_cast<int>(level_nodes.size()) - 1, n_levels - 1);
+        for (int level = max_broadcast; level > 0; level--) {
             auto higher = level_nodes[level];
             auto lower = level_nodes[level - 1];
             int N = lower.shape(1);
