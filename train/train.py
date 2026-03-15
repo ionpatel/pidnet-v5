@@ -24,6 +24,25 @@ from pidnet.model import PIDGraphNet, count_parameters
 from pidnet.fractal import FractalPIDNet
 from data import load_shakespeare, load_tinystories
 
+def load_dataset_by_name(name, seq_len, max_stories=50000, max_mb=100):
+    """Load dataset by name, supporting char-level and BPE."""
+    if name == "shakespeare":
+        return load_shakespeare(seq_len=seq_len)
+    elif name == "tinystories":
+        return load_tinystories(seq_len=seq_len, max_stories=max_stories)
+    elif name == "tinystories-bpe":
+        from data_bpe import load_tinystories_bpe
+        return load_tinystories_bpe(seq_len=seq_len, max_stories=max_stories)
+    elif name == "openwebtext":
+        from data_bpe import load_openwebtext
+        return load_openwebtext(seq_len=seq_len, max_mb=max_mb)
+    elif name.endswith(".txt"):
+        # Direct text file
+        from data_bpe import load_text_file
+        return load_text_file(name, seq_len=seq_len)
+    else:
+        raise ValueError(f"Unknown dataset: {name}")
+
 
 def check_collapse(text: str, threshold: int = 5) -> bool:
     """Check if generated text has repetition collapse.
@@ -56,10 +75,10 @@ def train(args):
     
     # Load data
     print("\n📚 Loading data...")
-    if args.dataset == "tinystories":
-        train_data, val_data = load_tinystories(seq_len=args.seq_len, max_stories=args.max_stories)
-    else:
-        train_data, val_data = load_shakespeare(seq_len=args.seq_len)
+    train_data, val_data = load_dataset_by_name(
+        args.dataset, args.seq_len, 
+        max_stories=args.max_stories, max_mb=args.max_mb
+    )
     
     # Create model
     print("\n🧠 Building model...")
@@ -142,13 +161,21 @@ def train(args):
     collapse_count = 0
     
     # Test prompts for generation
-    if args.dataset == "tinystories":
+    if "tinystories" in args.dataset:
         test_prompts = [
             "Once upon a time",
             "The little girl",
             "One day, a boy",
             "There was a",
             "She looked at",
+        ]
+    elif args.dataset in ("openwebtext",) or args.dataset.endswith(".txt"):
+        test_prompts = [
+            "The United States",
+            "In the beginning",
+            "Scientists have discovered",
+            "The problem with",
+            "According to recent",
         ]
     else:
         test_prompts = [
@@ -271,13 +298,11 @@ def train(args):
 
 def generate_only(args):
     """Load saved weights and generate samples."""
-    from data import load_shakespeare, load_tinystories
-    
     print("📚 Loading data (for tokenizer)...")
-    if args.dataset == "tinystories":
-        train_data, _ = load_tinystories(seq_len=args.seq_len, max_stories=args.max_stories)
-    else:
-        train_data, _ = load_shakespeare(seq_len=args.seq_len)
+    train_data, _ = load_dataset_by_name(
+        args.dataset, args.seq_len,
+        max_stories=args.max_stories, max_mb=args.max_mb
+    )
     
     print("🧠 Building model...")
     if args.fractal:
@@ -345,9 +370,10 @@ if __name__ == "__main__":
     parser.add_argument("--chunk-size", type=int, default=16, help="Chunk size for fractal pooling")
     parser.add_argument("--n-levels", type=int, default=3, help="Number of fractal levels")
     
-    parser.add_argument("--dataset", type=str, default="shakespeare", choices=["shakespeare", "tinystories"],
-                        help="Dataset to train on")
+    parser.add_argument("--dataset", type=str, default="shakespeare",
+                        help="Dataset: shakespeare, tinystories, tinystories-bpe, openwebtext, or path.txt")
     parser.add_argument("--max-stories", type=int, default=50000, help="Max TinyStories to load")
+    parser.add_argument("--max-mb", type=int, default=100, help="Max MB for OpenWebText download")
     parser.add_argument("--save", type=str, default=None, help="Save weights path")
     parser.add_argument("--load", type=str, default=None, help="Load weights and generate (skip training)")
     
