@@ -168,11 +168,11 @@ public:
     int n_levels = 3;
     bool tie_weights = false;
     
-    mx::array embed_weight;
-    mx::array pos_embed_weight;
-    mx::array readout_norm_w;
-    mx::array readout_norm_b;
-    mx::array readout_weight;
+    mx::array embed_weight = mx::array(0.0f);
+    mx::array pos_embed_weight = mx::array(0.0f);
+    mx::array readout_norm_w = mx::array(0.0f);
+    mx::array readout_norm_b = mx::array(0.0f);
+    mx::array readout_weight = mx::array(0.0f);
     
     PIDRewriteStep rewrite_step;
     
