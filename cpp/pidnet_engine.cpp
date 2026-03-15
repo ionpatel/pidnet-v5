@@ -274,6 +274,38 @@ int main(int argc, char* argv[]) {
         
         auto input = mx::array(prompt_enc.data(), 
             {1, static_cast<int>(prompt_enc.size())}, mx::int32);
+        
+        // Debug intermediates
+        int sl2 = static_cast<int>(prompt_enc.size());
+        auto positions2 = mx::arange(sl2);
+        auto tok_e = mx::take(W(model.w, "embed.weight"), mx::reshape(input, {-1}), 0);
+        tok_e = mx::reshape(tok_e, {1, sl2, model.d_model});
+        auto pos_e = mx::take(W(model.w, "pos_embed.weight"), positions2, 0);
+        auto dbg_nodes = tok_e + pos_e;
+        mx::eval(dbg_nodes);
+        
+        std::cout << "=== EMBEDDING ===" << std::endl;
+        // Print nodes[0,0,:5]
+        std::cout << "nodes[0,0,:5] = ";
+        for (int i = 0; i < 5; i++) {
+            auto v = mx::slice(dbg_nodes, {0,0,i}, {1,1,i+1});
+            mx::eval(v);
+            std::cout << v.item<float>() << " ";
+        }
+        std::cout << std::endl;
+        
+        std::cout << "nodes[0,3,:5] = ";
+        for (int i = 0; i < 5; i++) {
+            auto v = mx::slice(dbg_nodes, {0,3,i}, {1,4,i+1});
+            mx::eval(v);
+            std::cout << v.item<float>() << " ";
+        }
+        std::cout << std::endl;
+        
+        auto n_norm = mx::sqrt(mx::sum(mx::square(dbg_nodes)));
+        mx::eval(n_norm);
+        std::cout << "nodes norm = " << n_norm.item<float>() << std::endl;
+        
         auto logits = model.forward(input);
         mx::eval(logits);
         
