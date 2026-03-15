@@ -205,15 +205,29 @@ class HeterogeneousEngine:
             
             t_start = time.perf_counter()
             
-            # === GPU: Forward pass (PID rewriting) ===
+            # === GPU: Forward pass (PID rewriting) — COMPILED ===
             input_tokens = mx.array([generated])
             t_gpu_start = time.perf_counter()
-            logits, diagnostics = self.model(input_tokens)
-            mx.eval(logits)  # Force GPU computation
+            
+            # Use compiled forward if available
+            if hasattr(self.model, '_compiled_forward'):
+                if not hasattr(self, '_forward_fn'):
+                    try:
+                        self._forward_fn = mx.compile(self.model._compiled_forward)
+                        # Warmup trace
+                        _ = self._forward_fn(input_tokens)
+                        mx.eval(_)
+                    except Exception:
+                        self._forward_fn = self.model._compiled_forward
+                last_logits = self._forward_fn(input_tokens)[0]
+                diagnostics = {}
+            else:
+                logits, diagnostics = self.model(input_tokens)
+                last_logits = logits[0, -1]
+            
+            mx.eval(last_logits)
             gpu_ms = (time.perf_counter() - t_gpu_start) * 1000
             self.stats.gpu_compute_time_ms += gpu_ms
-            
-            last_logits = logits[0, -1]
             
             # === D-STREAM PREFETCH CHECK ===
             if 'pred_error' in diagnostics:
