@@ -27,5 +27,7 @@ endif()
 
 # Optimization flags for Apple Silicon
 if(APPLE)
-    target_compile_options(pidnet PRIVATE -O2 -mcpu=apple-m2 -fno-fast-math)
+    target_compile_options(pidnet PRIVATE -O2 -fno-fast-math -DMLX_NO_BF16)
+    # Workaround for Apple Clang bfloat16 backend bug
+    set_source_files_properties(pidnet_engine.cpp PROPERTIES COMPILE_FLAGS "-fno-slp-vectorize")
 endif()
