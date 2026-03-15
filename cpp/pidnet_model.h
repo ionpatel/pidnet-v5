@@ -16,10 +16,10 @@
 namespace mx = mlx::core;
 
 struct GraphState {
-    mx::array nodes;        // [batch, N, d]
-    mx::array adjacency;    // [batch, N, N]
-    mx::array fast_weights; // [batch, d, d]
-    mx::array prediction;   // [batch, N, d]
+    mx::array nodes = mx::array(0.0f);
+    mx::array adjacency = mx::array(0.0f);
+    mx::array fast_weights = mx::array(0.0f);
+    mx::array prediction = mx::array(0.0f);
 };
 
 struct PIDDiagnostics {
