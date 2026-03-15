@@ -59,9 +59,15 @@ std::vector<int> generate(
     float temperature = 0.8f,
     int top_k = 50,
     float rep_penalty = 1.5f,
-    int penalty_window = 32
+    int penalty_window = 32,
+    bool use_compile = true
 ) {
     std::vector<int> generated = prompt_tokens;
+    
+    // Compile forward pass — traces graph once, reuses Metal kernels
+    auto compiled_fwd = mx::compile([&model](const std::vector<mx::array>& inputs) {
+        return std::vector<mx::array>{model.forward(inputs[0])};
+    });
     
     for (int step = 0; step < max_new_tokens; step++) {
         int seq_len = static_cast<int>(generated.size());
@@ -70,8 +76,10 @@ std::vector<int> generate(
         // Build input tensor
         auto input = mx::array(generated.data(), {1, seq_len}, mx::int32);
         
-        // Forward pass (GPU) — lazy eval, only materialize at sample
-        auto logits = model.forward(input);
+        // Forward pass — compiled or raw
+        mx::array logits = use_compile 
+            ? compiled_fwd({input})[0]
+            : model.forward(input);
         
         // Get last token logits: logits is [1, seq_len, vocab]
         auto last_logits = mx::reshape(
