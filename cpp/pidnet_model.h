@@ -462,6 +462,15 @@ public:
             
             level_nodes[level] = current;
             
+            // Cache level 0 state for incremental inference
+            if (level == 0) {
+                cache.nodes = current;
+                cache.fast_weights = fast_weights;
+                cache.prediction = prediction;
+                cache.cached_len = seq_len;
+                cache.valid = true;
+            }
+            
             // Pool to next level
             if (level < n_levels - 1 && N >= chunk_size * 2 && (N % chunk_size == 0)) {
                 int n_chunks = N / chunk_size;
@@ -507,11 +516,7 @@ public:
             level_nodes[level - 1] = lower + gate_val * expanded;
         }
         
-        // Populate cache from level 0 (for incremental inference)
-        cache.nodes = current;  // current is level 0 after all rewrites
-        // fast_weights and prediction from last rewrite are already in scope
-        cache.cached_len = seq_len;
-        cache.valid = true;
+        // Cache is populated inside the level-0 loop below
         
         // === READOUT ===
         auto final_nodes = level_nodes[0];
