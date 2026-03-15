@@ -27,5 +27,5 @@ endif()
 
 # Optimization flags for Apple Silicon
 if(APPLE)
-    target_compile_options(pidnet PRIVATE -O3 -mcpu=apple-m2)
+    target_compile_options(pidnet PRIVATE -O2 -mcpu=apple-m2 -fno-fast-math)
 endif()
