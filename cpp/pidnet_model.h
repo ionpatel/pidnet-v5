@@ -191,8 +191,8 @@ public:
         std::cerr << "[fwd] embed OK" << std::endl;
         
         // Fractal bottom-up: rewrite at each level
-        std::vector<mx::array> level_nodes;
-        level_nodes.push_back(nodes);
+        std::vector<mx::array> level_nodes(n_levels, mx::array(0.0f));
+        level_nodes[0] = nodes;
         
         auto current = nodes;
         for (int level = 0; level < n_levels; level++) {
