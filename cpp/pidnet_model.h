@@ -220,8 +220,8 @@ public:
         
         // Embed
         auto positions = mx::arange(seq_len);
-        auto tok_embed = mx::take(embed_weight, tokens.reshape({-1}), 0);
-        tok_embed = tok_embed.reshape({batch, seq_len, d_model});
+        auto tok_embed = mx::take(embed_weight, mx::reshape(tokens, {-1}), 0);
+        tok_embed = mx::reshape(tok_embed, {batch, seq_len, d_model});
         auto pos_embed = mx::take(pos_embed_weight, positions, 0);
         auto nodes = tok_embed + pos_embed;
         
@@ -251,8 +251,8 @@ public:
             
             // R rounds of PID rewriting
             for (int r = 0; r < n_rewrite_steps; r++) {
-                auto [new_state, diag] = rewrite_step.forward(state);
-                state = new_state;
+                auto result = rewrite_step.forward(state);
+                state = result.first;
             }
             
             nodes = state.nodes;
